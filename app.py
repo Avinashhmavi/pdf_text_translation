@@ -1,9 +1,8 @@
 import os
 import time
+import requests
 from flask import Flask, request, render_template, send_file, jsonify
 import fitz  # PyMuPDF
-import torch
-from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 import re
 from werkzeug.utils import secure_filename
 
@@ -17,40 +16,27 @@ os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['OUTPUT_FOLDER'] = OUTPUT_FOLDER
 
-MODEL_NAME = "facebook/nllb-200-3.3B"
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+# Language configurations
 LANGUAGES = {
     "Hindi": {"code": "hin_Deva", "iso": "hi"},
     "Tamil": {"code": "tam_Taml", "iso": "ta"},
     "Telugu": {"code": "tel_Telu", "iso": "te"}
 }
+
 MAX_LENGTH_DEFAULT = 256
-MEMORY_THRESHOLD = 0.8
 
 DIGIT_MAP = {
     "Hindi": "०१२३४५६७८९",
     "Tamil": "௦௧௨௩௪௫௬௭௮௯",
     "Telugu": "౦౧౨౩౪౫౬౭౮౯"
 }
+
 LATIN_DIGITS = "0123456789"
 
-os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+# Hugging Face API configuration
+API_URL = "https://api-inference.huggingface.co/models/facebook/nllb-200-3.3B"
+API_TOKEN = "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"
 
-# Initialize model (unchanged)
-def initialize_model():
-    print("🔄 Initializing translation model...")
-    start = time.time()
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, src_lang="eng_Latn")
-    model = AutoModelForSeq2SeqLM.from_pretrained(
-        MODEL_NAME,
-        torch_dtype=torch.float16 if DEVICE == "cuda" else torch.float32
-    ).to(DEVICE).eval()
-    print(f"✅ Model loaded in {time.time()-start:.2f}s")
-    return tokenizer, model
-
-tokenizer, model = initialize_model()
-
-# Utility functions (unchanged)
 def parse_user_entities(user_input):
     entities = [e.strip() for e in user_input.split(',') if e.strip()]
     print(f"📌 Entities to preserve: {', '.join(entities) if entities else 'None'}")
@@ -104,92 +90,24 @@ def convert_numbers_to_script(text, target_lang):
     converted_text = pattern.sub(replace_digit, text)
     return converted_text
 
-def get_dynamic_batch_size(num_texts, fast_mode):
-    if DEVICE != "cuda":
-        return min(8, num_texts)
-    total_memory = torch.cuda.get_device_properties(0).total_memory
-    free_memory = total_memory - torch.cuda.memory_allocated()
-    tokens_per_text = MAX_LENGTH_DEFAULT
-    bytes_per_text = tokens_per_text * 4 * (3 if fast_mode else 1)
-    max_batch = max(1, min(free_memory // bytes_per_text, num_texts))
-    return min(16 if fast_mode else 4, max_batch)
-
-def translate_batch(texts, target_lang_code, fast_mode=False):
-    if not texts:
-        return []
-    batch_size = get_dynamic_batch_size(len(texts), fast_mode)
-    translated_texts = []
-    for i in range(0, len(texts), batch_size):
-        batch = texts[i:i + batch_size]
-        max_length = max(MAX_LENGTH_DEFAULT, max(len(t.split()) for t in batch) * 2)
-        try:
-            inputs = tokenizer(batch, return_tensors="pt", padding=True, truncation=True, max_length=max_length).to(DEVICE)
-            with torch.inference_mode():
-                outputs = model.generate(
-                    **inputs,
-                    forced_bos_token_id=tokenizer.convert_tokens_to_ids(target_lang_code),
-                    max_length=max_length,
-                    num_beams=3 if fast_mode else 1,
-                    use_cache=True,
-                    early_stopping=True
-                )
-            translated = [tokenizer.decode(output, skip_special_tokens=True) for output in outputs]
-            translated_texts.extend([re.sub(r'^\.+|\s*\.+$|^\s*…', '', t.strip()) for t in translated])
-            del inputs, outputs
-            if DEVICE == "cuda":
-                torch.cuda.empty_cache()
-        except RuntimeError as e:
-            print(f"⚠️ Memory error: {e}. Reducing batch size and retrying...")
-            if batch_size > 1:
-                batch_size = max(1, batch_size // 2)
-                translated_texts.extend(translate_batch(batch, target_lang_code, fast_mode))
-            else:
-                raise
-    return translated_texts
-
-def reset_gpu_memory():
-    global model, tokenizer
-    if DEVICE == "cuda":
-        del model
-        torch.cuda.empty_cache()
-        torch.cuda.reset_peak_memory_stats()
-        print("🔄 Refreshing GPU memory...")
-        start = time.time()
-        tokenizer, model = initialize_model()
-        print(f"✅ GPU memory refreshed in {time.time()-start:.2f}s")
-
-def check_memory_and_reset(total_pages):
-    if DEVICE != "cuda" or total_pages <= 5:
-        return False
-    total_memory = torch.cuda.get_device_properties(0).total_memory
-    allocated_memory = torch.cuda.memory_allocated()
-    if allocated_memory / total_memory > MEMORY_THRESHOLD:
-        reset_gpu_memory()
-        return True
-    return False
-
-def join_spans(spans):
-    if not spans:
-        return ""
-    spans = sorted(spans, key=lambda s: s["bbox"][0])
-    text_parts = [spans[0]["text"].strip()]
-    for i in range(1, len(spans)):
-        span1, span2 = spans[i - 1], spans[i]
-        d = span2["bbox"][0] - span1["bbox"][2]
-        text2 = span2["text"].strip()
-        if not text2:
-            continue
-        if len(span1["text"]) > 0 and len(text2) > 0:
-            width1 = span1["bbox"][2] - span1["bbox"][0]
-            width2 = span2["bbox"][2] - span2["bbox"][0]
-            min_avg_char_width = min(width1 / len(span1["text"]), width2 / len(text2))
-            if d < 0.5 * min_avg_char_width or d < 0:
-                text_parts.append(text2)
-            else:
-                text_parts.append(" " + text2)
-        else:
-            text_parts.append(text2)
-    return "".join(text_parts)
+def translate_batch(texts, target_lang_code):
+    headers = {
+        "Authorization": f"Bearer {API_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "inputs": texts,
+        "parameters": {
+            "src_lang": "eng_Latn",
+            "tgt_lang": target_lang_code,
+            "max_length": MAX_LENGTH_DEFAULT
+        }
+    }
+    response = requests.post(API_URL, headers=headers, json=payload)
+    if response.status_code == 200:
+        return [item['translation_text'] for item in response.json()]
+    else:
+        raise Exception(f"API Error: {response.status_code}, {response.text}")
 
 def extract_pdf_components(pdf_path):
     print(f"\n📄 Extracting components from {pdf_path}...")
@@ -251,7 +169,7 @@ def split_block_into_subblocks(block):
             current_subblock = {"text": "", "lines": [], "is_short": False}
     return subblocks
 
-def translate_chunk(chunk, entities, target_lang, fast_mode=False):
+def translate_chunk(chunk, entities, target_lang):
     target_lang_code = LANGUAGES[target_lang]["code"]
     all_subblocks = []
     for page in chunk:
@@ -272,7 +190,7 @@ def translate_chunk(chunk, entities, target_lang, fast_mode=False):
         texts.append(modified_text)
         placeholder_maps.append(placeholder_map)
     if texts:
-        translated_texts = translate_batch(texts, target_lang_code, fast_mode=fast_mode)
+        translated_texts = translate_batch(texts, target_lang_code)
         for subblock, translated_text, placeholder_map in zip([sb for sb in all_subblocks if sb["text"].strip()], translated_texts, placeholder_maps):
             for placeholder, original in placeholder_map.items():
                 if placeholder in translated_text:
@@ -350,7 +268,6 @@ def redistribute_translated_text(translated_text, original_lines):
         translated_lines[-1] = translated_lines[-1] + " " + remaining_text if translated_lines[-1] else remaining_text
     return translated_lines
 
-# Flask routes
 @app.route('/')
 def index():
     return render_template('index.html')
@@ -359,48 +276,40 @@ def index():
 def translate_pdf():
     if 'pdf_file' not in request.files:
         return jsonify({'error': 'No PDF file uploaded'}), 400
-    
     pdf_file = request.files['pdf_file']
     entities_input = request.form.get('entities', '')
     languages_input = request.form.get('languages', 'Hindi,Tamil,Telugu')
-    
     if pdf_file.filename == '':
         return jsonify({'error': 'No file selected'}), 400
-
     filename = secure_filename(pdf_file.filename)
     pdf_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
     pdf_file.save(pdf_path)
-
     entities = parse_user_entities(entities_input)
     languages = parse_user_languages(languages_input)
     components = extract_pdf_components(pdf_path)
     total_pages = len(components)
     fast_mode = total_pages <= 5
     output_files = []
-
     for lang in languages:
         start_time = time.time()
         print(f"\n🚀 Starting {lang} translation")
         if fast_mode:
-            translate_chunk(components, entities, lang, fast_mode=True)
+            translate_chunk(components, entities, lang)
             print(f"✅ Translated {total_pages} pages in one pass")
         else:
             chunk_size = 2
             num_chunks = (total_pages + chunk_size - 1) // chunk_size
             for i in range(0, total_pages, chunk_size):
-                check_memory_and_reset(total_pages)
                 chunk = components[i:i + chunk_size]
-                translate_chunk(chunk, entities, lang, fast_mode=False)
+                translate_chunk(chunk, entities, lang)
                 print(f"✅ Chunk {i // chunk_size + 1}/{num_chunks} translated ({len(chunk)} pages)")
         output_path = os.path.join(app.config['OUTPUT_FOLDER'], f"translated_{lang}_{filename}")
         rebuild_pdf(components, lang, output_path, pdf_path, use_white_background=False)
         if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
             output_files.append(output_path)
         print(f"\n✅ {lang} translation completed in {time.time()-start_time:.2f}s")
-
     if not output_files:
         return jsonify({'error': 'No translated PDFs generated'}), 500
-    
     return jsonify({
         'message': f"Translation completed for {', '.join(languages)}",
         'files': [os.path.basename(f) for f in output_files]
