@@ -1,7 +1,4 @@
 Flask
 pymupdf
-PyMuPDF
-torch
-fitz
 requests
-langdetect
+werkzeug
