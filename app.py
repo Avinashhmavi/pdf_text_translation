@@ -308,7 +308,6 @@ def redistribute_translated_text(translated_text, original_lines):
         remaining_text = " ".join(translated_words[word_idx:])
         translated_lines[-1] = translated_lines[-1] + " " + remaining_text if translated_lines[-1] else remaining_text
     return translated_lines
-
 # Flask routes
 @app.route('/')
 def index():
