@@ -19,7 +19,7 @@ app.config['OUTPUT_FOLDER'] = OUTPUT_FOLDER
 
 # Hugging Face API Configuration
 HF_API_KEY = "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"  # Your API key
-HF_API_URL = "https://api-inference.huggingface.co/models/facebook/nllb-200-3.3B"
+HF_API_URL = "https://api-inference.huggingface.co/models/facebook/nllb-200-distilled-600M"
 HEADERS = {"Authorization": f"Bearer {HF_API_KEY}"}
 
 LANGUAGES = {
