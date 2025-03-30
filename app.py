@@ -21,11 +21,22 @@ app.config['OUTPUT_FOLDER'] = OUTPUT_FOLDER
 HF_API_KEY = "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"  # Your API key
 HF_API_URL = "https://api-inference.huggingface.co/models/facebook/nllb-200-distilled-600M"
 HEADERS = {"Authorization": f"Bearer {HF_API_KEY}"}
-
+# Corrected Hugging Face Model Configuration
 LANGUAGES = {
-    "Hindi": {"code": "hin_Deva", "iso": "hi"},
-    "Tamil": {"code": "tam_Taml", "iso": "ta"},
-    "Telugu": {"code": "tel_Telu", "iso": "te"}
+    "Hindi": {"token_id": 256047, "code": "hin_Deva", "iso": "hi"},
+    "Tamil": {"token_id": 256157, "code": "tam_Taml", "iso": "ta"},
+    "Telugu": {"token_id": 256082, "code": "tel_Telu", "iso": "te"}
+}
+
+# Modified translate_batch function payload
+payload = {
+    "inputs": batch,
+    "parameters": {
+        "max_length": max_length,
+        "forced_bos_token_id": LANGUAGES[target_lang]["token_id"],  # Use integer token ID
+        "src_lang": "eng_Latn",
+        "tgt_lang": LANGUAGES[target_lang]["code"]
+    }
 }
 MAX_LENGTH_DEFAULT = 256
 
