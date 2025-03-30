@@ -288,7 +288,7 @@ def redistribute_translated_text(translated_text, original_lines):
     default_font = fitz.Font("helv")
     for line in original_lines:
         max_width = line["line_bbox"][2] - line["line_bbox"][0]
-        font Edit_size = line["font_size"]
+        font_edit_size = line["font_size"]
         current_line = []
         current_width = 0
         while word_idx < len(translated_words):
