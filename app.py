@@ -1,6 +1,7 @@
 import os
 import time
 import re
+import copy
 from flask import Flask, request, render_template, send_file, jsonify
 import fitz  # PyMuPDF
 from werkzeug.utils import secure_filename
@@ -16,7 +17,7 @@ os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['OUTPUT_FOLDER'] = OUTPUT_FOLDER
 
-# Language Configuration (adjusted for googletrans)
+# Language Configuration
 LANGUAGES = {
     "Hindi": {"code": "hi", "iso": "hi"},
     "Tamil": {"code": "ta", "iso": "ta"},
@@ -33,7 +34,6 @@ LATIN_DIGITS = "0123456789"
 # Initialize Google Translator
 translator = Translator()
 
-# Utility functions (unchanged except for translation)
 def parse_user_entities(user_input):
     return sorted({e.strip() for e in user_input.split(',') if e.strip()}, key=len, reverse=True)
 
@@ -70,29 +70,21 @@ def convert_numbers_to_script(text, target_lang):
     digit_map = DIGIT_MAP[target_lang]
     return re.sub(r'\d+', lambda m: ''.join(digit_map[int(d)] for d in m.group()), text)
 
-# Alternative Translation Function using googletrans
-def translate_batch(texts, target_lang, fast_mode=False):
+def translate_batch(texts, target_lang):
     if not texts:
         return []
     
-    translated_texts = []
     target_code = LANGUAGES[target_lang]["code"]
     
-    for text in texts:
-        try:
-            # Translate using googletrans
-            result = translator.translate(text, src='en', dest=target_code)
-            translated = result.text.strip()
-            translated = re.sub(r'^\s*…|\.+$', '', translated)  # Clean up
-            translated_texts.append(translated)
-        except Exception as e:
-            print(f"Translation error for '{text}': {str(e)}")
-            translated_texts.append(text)  # Fallback to original text on error
-        time.sleep(0.5)  # Avoid hitting rate limits
-    
-    return translated_texts
+    try:
+        translations = translator.translate(texts, src='en', dest=target_code)
+        translated_texts = [t.text.strip() for t in translations]
+        translated_texts = [re.sub(r'^\s*…|\.+$', '', t) for t in translated_texts]
+        return translated_texts
+    except Exception as e:
+        print(f"Translation error: {str(e)}")
+        return texts
 
-# PDF processing functions (unchanged except for calls to translate_batch)
 def extract_pdf_components(pdf_path):
     print(f"\n📄 Extracting components from {pdf_path}...")
     doc = fitz.open(pdf_path)
@@ -101,7 +93,7 @@ def extract_pdf_components(pdf_path):
         blocks = page.get_text("dict")["blocks"]
         text_blocks = []
         for b in blocks:
-            if b["type"] == 0:  # Text block
+            if b["type"] == 0:
                 lines = []
                 for line in b["lines"]:
                     if line["spans"]:
@@ -173,31 +165,29 @@ def split_block_into_subblocks(block):
         subblocks.append(current_subblock)
     return subblocks
 
-def translate_chunk(chunk, entities, target_lang, fast_mode=False):
+def translate_chunk(components, entities, target_lang):
     all_subblocks = []
-    for page in chunk:
+    for page in components:
         for block in page["text_blocks"]:
             subblocks = split_block_into_subblocks(block)
             block["subblocks"] = subblocks
             all_subblocks.extend(subblocks)
             
+    processed_subblocks = []
     texts = []
     placeholder_maps = []
     for subblock in all_subblocks:
-        if not subblock["text"].strip():
+        original_text = subblock["text"].strip()
+        if not original_text:
             continue
-        modified_text, ph_map = replace_with_placeholders(subblock["text"], entities)
+        modified_text, ph_map = replace_with_placeholders(original_text, entities)
         texts.append(modified_text)
         placeholder_maps.append(ph_map)
+        processed_subblocks.append(subblock)
         
-    translated_texts = translate_batch(texts, target_lang, fast_mode)
+    translated_texts = translate_batch(texts, target_lang)
     
-    for i, subblock in enumerate(all_subblocks):
-        if i >= len(translated_texts):
-            continue
-        translated = translated_texts[i]
-        ph_map = placeholder_maps[i]
-        
+    for subblock, translated, ph_map in zip(processed_subblocks, translated_texts, placeholder_maps):
         for placeholder, original in ph_map.items():
             translated = translated.replace(placeholder, original)
         translated = convert_numbers_to_script(translated, target_lang)
@@ -266,7 +256,6 @@ def redistribute_translated_text(translated_text, original_lines):
     
     return lines + [""]*(len(original_lines)-len(lines))
 
-# Flask Routes (unchanged)
 @app.route('/')
 def index():
     return render_template('index.html')
@@ -293,9 +282,10 @@ def translate_pdf():
 
         for lang in languages:
             start_time = time.time()
-            translate_chunk(components, entities, lang, fast_mode=len(components) <= 5)
+            lang_components = copy.deepcopy(components)
+            translate_chunk(lang_components, entities, lang)
             output_path = os.path.join(app.config['OUTPUT_FOLDER'], f"translated_{lang}_{filename}")
-            rebuild_pdf(components, lang, output_path, pdf_path)
+            rebuild_pdf(lang_components, lang, output_path, pdf_path)
             output_files.append(output_path)
             print(f"{lang} translation completed in {time.time()-start_time:.2f}s")
 
