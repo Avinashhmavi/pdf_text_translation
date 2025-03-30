@@ -4,6 +4,7 @@ from flask import Flask, request, render_template, send_file, jsonify
 import fitz  # PyMuPDF
 import re
 import requests
+import time
 from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
@@ -94,7 +95,7 @@ def translate_batch(texts, target_lang_code, fast_mode=False):
     if not texts:
         return []
     translated_texts = []
-    batch_size = 8 if fast_mode else 4  # Adjust based on API limits
+    batch_size = 8 if fast_mode else 4
     for i in range(0, len(texts), batch_size):
         batch = texts[i:i + batch_size]
         max_length = max(MAX_LENGTH_DEFAULT, max(len(t.split()) for t in batch) * 2)
@@ -111,7 +112,6 @@ def translate_batch(texts, target_lang_code, fast_mode=False):
             response = requests.post(HF_API_URL, headers=HEADERS, json=payload)
             response.raise_for_status()
             result = response.json()
-            # Handle API response format
             if isinstance(result, list) and all(isinstance(r, dict) and "translation_text" in r for r in result):
                 translated = [r["translation_text"] for r in result]
             else:
@@ -124,6 +124,7 @@ def translate_batch(texts, target_lang_code, fast_mode=False):
                 translated_texts.extend(translate_batch(batch, target_lang_code, fast_mode))
             else:
                 raise Exception(f"API failed: {e}")
+        time.sleep(1)  # Add a delay to avoid hitting rate limits
     return translated_texts
 
 def join_spans(spans):
