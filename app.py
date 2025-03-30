@@ -18,7 +18,7 @@ app.config['OUTPUT_FOLDER'] = OUTPUT_FOLDER
 
 # Hugging Face API Configuration
 HF_API_KEY = "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"
-HF_API_URL = "https://api-inference.huggingface.co/models/facebook/nllb-200-distilled-600M"
+HF_API_URL = "https://api-inference.huggingface.co/models/facebook/nllb-200-distilled-100M"
 HEADERS = {"Authorization": f"Bearer {HF_API_KEY}"}
 
 LANGUAGES = {
@@ -77,7 +77,7 @@ def translate_batch(texts, target_lang, fast_mode=False):
         return []
     
     translated_texts = []
-    batch_size = 8 if fast_mode else 4
+    batch_size = 2
     max_retries = 3
     lang_data = LANGUAGES[target_lang]
 
