@@ -1,10 +1,10 @@
 import os
 import time
 import re
-import requests
 from flask import Flask, request, render_template, send_file, jsonify
 import fitz  # PyMuPDF
 from werkzeug.utils import secure_filename
+from googletrans import Translator, LANGUAGES as GOOGLE_LANGUAGES
 
 app = Flask(__name__)
 
@@ -16,22 +16,12 @@ os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['OUTPUT_FOLDER'] = OUTPUT_FOLDER
 
-# Hugging Face API Configuration
-HF_API_KEY = "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"
-HF_API_URL = "https://api-inference.huggingface.co/models/facebook/nllb-200-1.3B"
-HEADERS = {
-    "Authorization": f"Bearer {HF_API_KEY}",
-    "X-Wait-For-Model": "180",  # Wait up to 3 minutes
-    "X-Use-Cache": "0"
-}
-
-# Update token IDs for 1.3B model:
+# Language Configuration (adjusted for googletrans)
 LANGUAGES = {
-    "Hindi": {"token_id": 256047, "code": "hin_Deva", "iso": "hi"},
-    "Tamil": {"token_id": 256157, "code": "tam_Taml", "iso": "ta"},
-    "Telugu": {"token_id": 256082, "code": "tel_Telu", "iso": "te"}
+    "Hindi": {"code": "hi", "iso": "hi"},
+    "Tamil": {"code": "ta", "iso": "ta"},
+    "Telugu": {"code": "te", "iso": "te"}
 }
-MAX_LENGTH_DEFAULT = 512
 
 DIGIT_MAP = {
     "Hindi": "०१२३४५६७८९",
@@ -40,7 +30,10 @@ DIGIT_MAP = {
 }
 LATIN_DIGITS = "0123456789"
 
-# Utility functions
+# Initialize Google Translator
+translator = Translator()
+
+# Utility functions (unchanged except for translation)
 def parse_user_entities(user_input):
     return sorted({e.strip() for e in user_input.split(',') if e.strip()}, key=len, reverse=True)
 
@@ -77,61 +70,29 @@ def convert_numbers_to_script(text, target_lang):
     digit_map = DIGIT_MAP[target_lang]
     return re.sub(r'\d+', lambda m: ''.join(digit_map[int(d)] for d in m.group()), text)
 
+# Alternative Translation Function using googletrans
 def translate_batch(texts, target_lang, fast_mode=False):
     if not texts:
         return []
     
     translated_texts = []
-    batch_size = 2
-    max_retries = 3
-    lang_data = LANGUAGES[target_lang]
-
-    for i in range(0, len(texts), batch_size):
-        batch = texts[i:i + batch_size]
-        max_length = max(MAX_LENGTH_DEFAULT, max(len(t.split()) for t in batch) * 2)
-        payload = {
-            "inputs": batch,
-            "parameters": {
-                "max_length": max_length,
-                "forced_bos_token_id": lang_data["token_id"],
-                "src_lang": "eng_Latn",
-                "tgt_lang": lang_data["code"]
-            }
-        }
-
-        for attempt in range(max_retries):
-            try:
-                response = requests.post(HF_API_URL, headers=HEADERS, json=payload)
-                response.raise_for_status()
-                result = response.json()
-
-                if isinstance(result, list):
-                    translated = [r.get("translation_text", "") for r in result]
-                    translated_texts.extend([re.sub(r'^\s*…|\.+$', '', t.strip()) for t in translated])
-                    break
-                else:
-                    if "estimated_time" in result:
-                        wait_time = result["estimated_time"] + 5
-                        print(f"Model loading, retrying in {wait_time}s...")
-                        time.sleep(wait_time)
-                        continue
-                    raise ValueError(f"Unexpected response format: {result}")
-
-            except requests.exceptions.HTTPError as e:
-                if e.response.status_code == 503 and attempt < max_retries - 1:
-                    wait_time = 10 * (attempt + 1)
-                    print(f"Server overloaded, retrying in {wait_time}s...")
-                    time.sleep(wait_time)
-                    continue
-                raise
-
-            time.sleep(1)
-
+    target_code = LANGUAGES[target_lang]["code"]
+    
+    for text in texts:
+        try:
+            # Translate using googletrans
+            result = translator.translate(text, src='en', dest=target_code)
+            translated = result.text.strip()
+            translated = re.sub(r'^\s*…|\.+$', '', translated)  # Clean up
+            translated_texts.append(translated)
+        except Exception as e:
+            print(f"Translation error for '{text}': {str(e)}")
+            translated_texts.append(text)  # Fallback to original text on error
+        time.sleep(0.5)  # Avoid hitting rate limits
+    
     return translated_texts
 
-# PDF processing functions (extract_pdf_components, split_block_into_subblocks, 
-# ... [Keep previous configuration and constants] ...
-
+# PDF processing functions (unchanged except for calls to translate_batch)
 def extract_pdf_components(pdf_path):
     print(f"\n📄 Extracting components from {pdf_path}...")
     doc = fitz.open(pdf_path)
@@ -305,7 +266,7 @@ def redistribute_translated_text(translated_text, original_lines):
     
     return lines + [""]*(len(original_lines)-len(lines))
 
-# ... [Keep the Flask routes from previous code] ...
+# Flask Routes (unchanged)
 @app.route('/')
 def index():
     return render_template('index.html')
