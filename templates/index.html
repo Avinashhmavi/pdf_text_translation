@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF Translator</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        h1 {
+            text-align: center;
+        }
+        .form-container {
+            border: 1px solid #ccc;
+            padding: 20px;
+            border-radius: 5px;
+        }
+        label {
+            display: block;
+            margin: 10px 0 5px;
+        }
+        input, button {
+            width: 100%;
+            padding: 8px;
+            margin-bottom: 10px;
+        }
+        button {
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        #status {
+            margin-top: 20px;
+            font-weight: bold;
+        }
+        #download-links {
+            margin-top: 20px;
+        }
+        .download-link {
+            display: block;
+            margin: 5px 0;
+            color: #007BFF;
+            text-decoration: none;
+        }
+    </style>
+</head>
+<body>
+    <h1>PDF Translator</h1>
+    <p>Upload a PDF and translate it into Hindi, Tamil, or Telugu.</p>
+    <div class="form-container">
+        <form id="translate-form" enctype="multipart/form-data">
+            <label for="pdf_file">Upload PDF:</label>
+            <input type="file" id="pdf_file" name="pdf_file" accept=".pdf" required>
+            
+            <label for="entities">Entities to Preserve (comma-separated):</label>
+            <input type="text" id="entities" name="entities" placeholder="Optional">
+            
+            <label for="languages">Target Languages (comma-separated):</label>
+            <input type="text" id="languages" name="languages" placeholder="Hindi, Tamil, Telugu" value="Hindi,Tamil,Telugu">
+            
+            <button type="submit">Translate</button>
+        </form>
+        <div id="status"></div>
+        <div id="download-links"></div>
+    </div>
+
+    <script>
+        document.getElementById('translate-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const formData = new FormData();
+            formData.append('pdf_file', document.getElementById('pdf_file').files[0]);
+            formData.append('entities', document.getElementById('entities').value);
+            formData.append('languages', document.getElementById('languages').value);
+
+            document.getElementById('status').textContent = 'Translating...';
+            document.getElementById('download-links').innerHTML = '';
+
+            try {
+                const response = await fetch('/translate', {
+                    method: 'POST',
+                    body: formData
+                });
+                const result = await response.json();
+                if (response.ok) {
+                    document.getElementById('status').textContent = result.message;
+                    result.files.forEach(file => {
+                        const link = document.createElement('a');
+                        link.href = `/download/${file}`;
+                        link.textContent = `Download ${file}`;
+                        link.className = 'download-link';
+                        document.getElementById('download-links').appendChild(link);
+                    });
+                } else {
+                    document.getElementById('status').textContent = `Error: ${result.error}`;
+                }
+            } catch (error) {
+                document.getElementById('status').textContent = 'Error: Something went wrong.';
+                console.error(error);
+            }
+        });
+    </script>
+</body>
+</html>
