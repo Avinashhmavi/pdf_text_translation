@@ -2,12 +2,6 @@ Flask
 pymupdf
 PyMuPDF
 torch
-transformers
-pillow
-bitsandbytes
-sentencepiece
-accelerate
-werkzeug
 fitz
 requests
 langdetect
