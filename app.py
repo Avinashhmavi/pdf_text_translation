@@ -125,9 +125,182 @@ def translate_batch(texts, target_lang, fast_mode=False):
     return translated_texts
 
 # PDF processing functions (extract_pdf_components, split_block_into_subblocks, 
-# translate_chunk, rebuild_pdf, redistribute_translated_text) remain the same as original
-# ...
+# ... [Keep previous configuration and constants] ...
 
+def extract_pdf_components(pdf_path):
+    print(f"\n📄 Extracting components from {pdf_path}...")
+    doc = fitz.open(pdf_path)
+    components = []
+    for page_num, page in enumerate(doc):
+        blocks = page.get_text("dict")["blocks"]
+        text_blocks = []
+        for b in blocks:
+            if b["type"] == 0:  # Text block
+                lines = []
+                for line in b["lines"]:
+                    if line["spans"]:
+                        text = join_spans(line["spans"])
+                        if text.strip():
+                            lines.append({
+                                "text": text,
+                                "y_pos": line["spans"][0]["origin"][1],
+                                "x_pos": line["spans"][0]["origin"][0],
+                                "font_size": line["spans"][0]["size"],
+                                "line_bbox": line["bbox"]
+                            })
+                if lines:
+                    text_blocks.append({"bbox": b["bbox"], "lines": lines})
+        components.append({"page_num": page_num, "text_blocks": text_blocks, "size": (page.rect.width, page.rect.height)})
+    doc.close()
+    return components
+
+def join_spans(spans):
+    if not spans:
+        return ""
+    spans = sorted(spans, key=lambda s: s["bbox"][0])
+    text_parts = [spans[0]["text"].strip()]
+    for i in range(1, len(spans)):
+        span1, span2 = spans[i - 1], spans[i]
+        d = span2["bbox"][0] - span1["bbox"][2]
+        text2 = span2["text"].strip()
+        if not text2:
+            continue
+        if d < 0.5 * min((span1["bbox"][2] - span1["bbox"][0])/len(span1["text"]), 
+                        (span2["bbox"][2] - span2["bbox"][0])/len(text2)):
+            text_parts.append(text2)
+        else:
+            text_parts.append(" " + text2)
+    return "".join(text_parts)
+
+def split_block_into_subblocks(block):
+    lines = block["lines"]
+    subblocks = []
+    current_subblock = {"text": "", "lines": [], "is_short": False}
+    max_words = 50
+    
+    for i, line in enumerate(lines):
+        text = line["text"].strip()
+        if not text:
+            continue
+            
+        is_short = len(text.split()) <= 3
+        font_size = line["font_size"]
+        current_words = current_subblock["text"].split()
+        
+        if len(current_words) + len(text.split()) > max_words or font_size > 20:
+            subblocks.append(current_subblock)
+            current_subblock = {"text": "", "lines": [], "is_short": False}
+            
+        if i > 0:
+            gap = lines[i]["y_pos"] - lines[i-1]["y_pos"] - lines[i-1]["font_size"]
+            x_shift = abs(line["x_pos"] - lines[i-1]["x_pos"])
+            
+            if gap > font_size * 0.5 or x_shift > 10:
+                subblocks.append(current_subblock)
+                current_subblock = {"text": "", "lines": [], "is_short": False}
+                
+        current_subblock["text"] += " " + text if current_subblock["text"] else text
+        current_subblock["lines"].append(line)
+        current_subblock["is_short"] = is_short
+        
+    if current_subblock["text"]:
+        subblocks.append(current_subblock)
+    return subblocks
+
+def translate_chunk(chunk, entities, target_lang, fast_mode=False):
+    all_subblocks = []
+    for page in chunk:
+        for block in page["text_blocks"]:
+            subblocks = split_block_into_subblocks(block)
+            block["subblocks"] = subblocks
+            all_subblocks.extend(subblocks)
+            
+    texts = []
+    placeholder_maps = []
+    for subblock in all_subblocks:
+        if not subblock["text"].strip():
+            continue
+        modified_text, ph_map = replace_with_placeholders(subblock["text"], entities)
+        texts.append(modified_text)
+        placeholder_maps.append(ph_map)
+        
+    translated_texts = translate_batch(texts, target_lang, fast_mode)
+    
+    for i, subblock in enumerate(all_subblocks):
+        if i >= len(translated_texts):
+            continue
+        translated = translated_texts[i]
+        ph_map = placeholder_maps[i]
+        
+        for placeholder, original in ph_map.items():
+            translated = translated.replace(placeholder, original)
+        translated = convert_numbers_to_script(translated, target_lang)
+        subblock["translated_text"] = translated
+
+def rebuild_pdf(components, target_lang, output_path, original_pdf_path):
+    doc = fitz.open(original_pdf_path)
+    lang_iso = LANGUAGES[target_lang]["iso"]
+    
+    for page_data in components:
+        page = doc[page_data["page_num"]]
+        links = page.get_links()
+        
+        for block in page_data["text_blocks"]:
+            page.add_redact_annot(block["bbox"])
+            page.apply_redactions()
+            
+            for subblock in block.get("subblocks", []):
+                if not subblock.get("translated_text", "").strip():
+                    continue
+                
+                translated_lines = redistribute_translated_text(
+                    subblock["translated_text"], 
+                    subblock["lines"]
+                )
+                
+                for line, translated in zip(subblock["lines"], translated_lines):
+                    rect = fitz.Rect(line["line_bbox"])
+                    html = f'<p lang="{lang_iso}">{translated}</p>'
+                    page.insert_htmlbox(rect, html)
+        
+        for link in links:
+            page.insert_link(link)
+    
+    doc.save(output_path, garbage=4, deflate=True)
+    doc.close()
+
+def redistribute_translated_text(translated_text, original_lines):
+    words = translated_text.split()
+    lines = []
+    current_line = []
+    current_width = 0
+    
+    for line in original_lines:
+        if not words:
+            break
+            
+        max_width = line["line_bbox"][2] - line["line_bbox"][0]
+        font_size = line["font_size"]
+        font = fitz.Font("helv")
+        
+        while words:
+            word_width = font.text_length(words[0] + " ", fontsize=font_size)
+            if current_width + word_width <= max_width:
+                current_line.append(words.pop(0))
+                current_width += word_width
+            else:
+                break
+                
+        lines.append(" ".join(current_line))
+        current_line = []
+        current_width = 0
+    
+    if words:
+        lines[-1] += " " + " ".join(words)
+    
+    return lines + [""]*(len(original_lines)-len(lines))
+
+# ... [Keep the Flask routes from previous code] ...
 @app.route('/')
 def index():
     return render_template('index.html')
