@@ -5,7 +5,9 @@ torch
 transformers
 pillow
 bitsandbytes
-langdetect
 sentencepiece
 accelerate
 werkzeug
+fitz
+requests
+langdetect
