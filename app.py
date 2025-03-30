@@ -1,11 +1,10 @@
 import os
 import time
 import re
-import copy
+import requests
 from flask import Flask, request, render_template, send_file, jsonify
 import fitz  # PyMuPDF
 from werkzeug.utils import secure_filename
-from googletrans import Translator, LANGUAGES as GOOGLE_LANGUAGES
 
 app = Flask(__name__)
 
@@ -17,12 +16,22 @@ os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['OUTPUT_FOLDER'] = OUTPUT_FOLDER
 
-# Language Configuration
-LANGUAGES = {
-    "Hindi": {"code": "hi", "iso": "hi"},
-    "Tamil": {"code": "ta", "iso": "ta"},
-    "Telugu": {"code": "te", "iso": "te"}
+# Hugging Face API Configuration
+HF_API_KEY = "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"
+HF_API_URL = "https://api-inference.huggingface.co/models/facebook/nllb-200-3.3B"
+HEADERS = {
+    "Authorization": f"Bearer {HF_API_KEY}",
+    "X-Wait-For-Model": "180",  # Wait up to 3 minutes
+    "X-Use-Cache": "0"
 }
+
+# Update token IDs for 1.3B model:
+LANGUAGES = {
+    "Hindi": {"token_id": 256047, "code": "hin_Deva", "iso": "hi"},
+    "Tamil": {"token_id": 256157, "code": "tam_Taml", "iso": "ta"},
+    "Telugu": {"token_id": 256082, "code": "tel_Telu", "iso": "te"}
+}
+MAX_LENGTH_DEFAULT = 512
 
 DIGIT_MAP = {
     "Hindi": "०१२३४५६७८९",
@@ -31,9 +40,7 @@ DIGIT_MAP = {
 }
 LATIN_DIGITS = "0123456789"
 
-# Initialize Google Translator
-translator = Translator()
-
+# Utility functions
 def parse_user_entities(user_input):
     return sorted({e.strip() for e in user_input.split(',') if e.strip()}, key=len, reverse=True)
 
@@ -70,20 +77,60 @@ def convert_numbers_to_script(text, target_lang):
     digit_map = DIGIT_MAP[target_lang]
     return re.sub(r'\d+', lambda m: ''.join(digit_map[int(d)] for d in m.group()), text)
 
-def translate_batch(texts, target_lang):
+def translate_batch(texts, target_lang, fast_mode=False):
     if not texts:
         return []
     
-    target_code = LANGUAGES[target_lang]["code"]
-    
-    try:
-        translations = translator.translate(texts, src='en', dest=target_code)
-        translated_texts = [t.text.strip() for t in translations]
-        translated_texts = [re.sub(r'^\s*…|\.+$', '', t) for t in translated_texts]
-        return translated_texts
-    except Exception as e:
-        print(f"Translation error: {str(e)}")
-        return texts
+    translated_texts = []
+    batch_size = 2
+    max_retries = 3
+    lang_data = LANGUAGES[target_lang]
+
+    for i in range(0, len(texts), batch_size):
+        batch = texts[i:i + batch_size]
+        max_length = max(MAX_LENGTH_DEFAULT, max(len(t.split()) for t in batch) * 2)
+        payload = {
+            "inputs": batch,
+            "parameters": {
+                "max_length": max_length,
+                "forced_bos_token_id": lang_data["token_id"],
+                "src_lang": "eng_Latn",
+                "tgt_lang": lang_data["code"]
+            }
+        }
+
+        for attempt in range(max_retries):
+            try:
+                response = requests.post(HF_API_URL, headers=HEADERS, json=payload)
+                response.raise_for_status()
+                result = response.json()
+
+                if isinstance(result, list):
+                    translated = [r.get("translation_text", "") for r in result]
+                    translated_texts.extend([re.sub(r'^\s*…|\.+$', '', t.strip()) for t in translated])
+                    break
+                else:
+                    if "estimated_time" in result:
+                        wait_time = result["estimated_time"] + 5
+                        print(f"Model loading, retrying in {wait_time}s...")
+                        time.sleep(wait_time)
+                        continue
+                    raise ValueError(f"Unexpected response format: {result}")
+
+            except requests.exceptions.HTTPError as e:
+                if e.response.status_code == 503 and attempt < max_retries - 1:
+                    wait_time = 10 * (attempt + 1)
+                    print(f"Server overloaded, retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                    continue
+                raise
+
+            time.sleep(1)
+
+    return translated_texts
+
+# PDF processing functions (extract_pdf_components, split_block_into_subblocks, 
+# ... [Keep previous configuration and constants] ...
 
 def extract_pdf_components(pdf_path):
     print(f"\n📄 Extracting components from {pdf_path}...")
@@ -93,7 +140,7 @@ def extract_pdf_components(pdf_path):
         blocks = page.get_text("dict")["blocks"]
         text_blocks = []
         for b in blocks:
-            if b["type"] == 0:
+            if b["type"] == 0:  # Text block
                 lines = []
                 for line in b["lines"]:
                     if line["spans"]:
@@ -165,29 +212,31 @@ def split_block_into_subblocks(block):
         subblocks.append(current_subblock)
     return subblocks
 
-def translate_chunk(components, entities, target_lang):
+def translate_chunk(chunk, entities, target_lang, fast_mode=False):
     all_subblocks = []
-    for page in components:
+    for page in chunk:
         for block in page["text_blocks"]:
             subblocks = split_block_into_subblocks(block)
             block["subblocks"] = subblocks
             all_subblocks.extend(subblocks)
             
-    processed_subblocks = []
     texts = []
     placeholder_maps = []
     for subblock in all_subblocks:
-        original_text = subblock["text"].strip()
-        if not original_text:
+        if not subblock["text"].strip():
             continue
-        modified_text, ph_map = replace_with_placeholders(original_text, entities)
+        modified_text, ph_map = replace_with_placeholders(subblock["text"], entities)
         texts.append(modified_text)
         placeholder_maps.append(ph_map)
-        processed_subblocks.append(subblock)
         
-    translated_texts = translate_batch(texts, target_lang)
+    translated_texts = translate_batch(texts, target_lang, fast_mode)
     
-    for subblock, translated, ph_map in zip(processed_subblocks, translated_texts, placeholder_maps):
+    for i, subblock in enumerate(all_subblocks):
+        if i >= len(translated_texts):
+            continue
+        translated = translated_texts[i]
+        ph_map = placeholder_maps[i]
+        
         for placeholder, original in ph_map.items():
             translated = translated.replace(placeholder, original)
         translated = convert_numbers_to_script(translated, target_lang)
@@ -256,6 +305,7 @@ def redistribute_translated_text(translated_text, original_lines):
     
     return lines + [""]*(len(original_lines)-len(lines))
 
+# ... [Keep the Flask routes from previous code] ...
 @app.route('/')
 def index():
     return render_template('index.html')
@@ -282,10 +332,9 @@ def translate_pdf():
 
         for lang in languages:
             start_time = time.time()
-            lang_components = copy.deepcopy(components)
-            translate_chunk(lang_components, entities, lang)
+            translate_chunk(components, entities, lang, fast_mode=len(components) <= 5)
             output_path = os.path.join(app.config['OUTPUT_FOLDER'], f"translated_{lang}_{filename}")
-            rebuild_pdf(lang_components, lang, output_path, pdf_path)
+            rebuild_pdf(components, lang, output_path, pdf_path)
             output_files.append(output_path)
             print(f"{lang} translation completed in {time.time()-start_time:.2f}s")
 
