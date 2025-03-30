@@ -18,8 +18,12 @@ app.config['OUTPUT_FOLDER'] = OUTPUT_FOLDER
 
 # Hugging Face API Configuration
 HF_API_KEY = "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"
-HF_API_URL = "https://api-inference.huggingface.co/models/facebook/nllb-200-distilled-100M"
-HEADERS = {"Authorization": f"Bearer {HF_API_KEY}"}
+HF_API_URL = "https://api-inference.huggingface.co/models/facebook/nllb-200-distilled-600M"
+HEADERS = {
+    "Authorization": f"Bearer {HF_API_KEY}",
+    "X-Wait-For-Model": "180",  # Wait up to 3 minutes
+    "X-Use-Cache": "0"
+}
 
 LANGUAGES = {
     "Hindi": {"token_id": 256047, "code": "hin_Deva", "iso": "hi"},
