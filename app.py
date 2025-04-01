@@ -187,8 +187,8 @@ def translate_text_batch(text_batch, target_lang, retry_count=2):
     for attempt in range(retry_count + 1):
         try:
             response = requests.post(
-                GROQ_API_URL, 
-                headers=headers, 
+                GROQ_API_URL,
+                headers=headers,
                 json=payload,
                 timeout=REQUEST_TIMEOUT
             )
@@ -399,8 +399,8 @@ def translate_pdf(job_id, pdf_path, entities, languages):
         for lang in languages:
             try:
                 translated_components = translate_pdf_components(
-                    components.copy(), 
-                    lang, 
+                    components.copy(),
+                    lang,
                     entities,
                     job_id
                 )
@@ -440,12 +440,10 @@ def translate_pdf(job_id, pdf_path, entities, languages):
 # Flask Routes
 @app.route('/')
 def index():
-    """Home page"""
     return render_template('index.html', languages=LANGUAGES.keys())
 
 @app.route('/translate', methods=['POST'])
 def translate():
-    """Handle PDF translation request"""
     if 'pdf' not in request.files:
         return jsonify({'error': 'No PDF file provided'}), 400
 
@@ -473,7 +471,6 @@ def translate():
 
 @app.route('/progress/<job_id>')
 def get_progress(job_id):
-    """Get translation progress"""
     job = translation_jobs.get(job_id)
     if not job:
         return jsonify({'error': 'Job not found'}), 404
@@ -493,7 +490,6 @@ def get_progress(job_id):
 
 @app.route('/download/<job_id>/<language>')
 def download_file(job_id, language):
-    """Download translated PDF"""
     job = translation_jobs.get(job_id)
     if not job or job.status != 'completed' or language not in job.output_files:
         return jsonify({'error': 'File not found'}), 404
@@ -512,4 +508,4 @@ def download_file(job_id, language):
     return response
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(debug=True)
