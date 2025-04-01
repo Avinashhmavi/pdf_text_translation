@@ -79,24 +79,23 @@ def translate_batch(texts, target_lang, fast_mode=False):
     
     translated_texts = []
     batch_size = 2
-    max_retries = 5  # Increased retries for reliability
+    max_retries = 5
     lang_code = LANGUAGES[target_lang]["code"]
 
     for i in range(0, len(texts), batch_size):
         batch = texts[i:i + batch_size]
         max_length = max(MAX_LENGTH_DEFAULT, max(len(t.split()) for t in batch) * 2)
         
-        # Craft a prompt for LlamaAPI
         prompt = f"Translate the following English text to {target_lang} ({lang_code}) with high accuracy, preserving meaning and context:\n\n" + "\n\n".join(batch)
         api_request_json = {
-            "model": "llama3.3-70b",  # Specify Llama 3.3-70B model
+            "model": "llama3.3-70b",
             "messages": [
                 {"role": "user", "content": prompt}
             ],
             "max_tokens": max_length,
-            "temperature": 0.3,  # Lower temperature for deterministic output
-            "top_p": 0.9,  # Adjust for better quality
-            "frequency_penalty": 1.0,  # Reduce repetition
+            "temperature": 0.3,
+            "top_p": 0.9,
+            "frequency_penalty": 1.0,
             "stream": False
         }
 
@@ -104,12 +103,27 @@ def translate_batch(texts, target_lang, fast_mode=False):
             try:
                 response = llama.run(api_request_json)
                 result = response.json()
-
-                # Extract the translated text from the response
-                translated_text = result.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+                
+                # Log the raw response for debugging
+                print(f"Raw API response: {json.dumps(result, indent=2)}")
+                
+                # Check if 'choices' exists and is a list
+                if "choices" not in result or not isinstance(result["choices"], list):
+                    raise ValueError(f"Unexpected response format: 'choices' missing or not a list - {result}")
+                
+                # Extract translated text
+                choices = result["choices"]
+                if not choices:
+                    raise ValueError("No choices returned in response")
+                
+                # Assuming the first choice contains the assistant's response
+                choice = choices[0]
+                if "message" not in choice or "content" not in choice["message"]:
+                    raise ValueError(f"Unexpected choice format: {choice}")
+                
+                translated_text = choice["message"]["content"].strip()
                 translated_batch = [t.strip() for t in translated_text.split("\n\n") if t.strip()]
                 
-                # Ensure the number of translations matches the input batch
                 if len(translated_batch) != len(batch):
                     raise ValueError(f"Mismatch in translation count: expected {len(batch)}, got {len(translated_batch)}")
                 
@@ -118,13 +132,13 @@ def translate_batch(texts, target_lang, fast_mode=False):
 
             except Exception as e:
                 if attempt < max_retries - 1:
-                    wait_time = 5 * (attempt + 1)  # Exponential backoff
+                    wait_time = 5 * (attempt + 1)
                     print(f"Error: {str(e)}. Retrying in {wait_time}s...")
                     time.sleep(wait_time)
                     continue
                 raise Exception(f"Translation failed after {max_retries} attempts: {str(e)}")
 
-            time.sleep(0.5)  # Small delay between retries
+            time.sleep(0.5)
 
     return translated_texts
 
