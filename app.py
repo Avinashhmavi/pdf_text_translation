@@ -8,9 +8,9 @@ from io import BytesIO
 app = Flask(__name__)
 
 # Grok API Configuration
-GROQ_API_KEY = "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"
-GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
-MODEL_NAME = "gemma2-9b-it"  # Using Gemma2 9B Instruct model
+GROK_API_KEY = "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"
+GROK_API_URL = "https://api.groq.com/openai/v1/chat/completions"
+MODEL_NAME = "gemma2-9b-it"
 
 # Language Configuration
 LANGUAGES = {
@@ -24,6 +24,37 @@ DIGIT_MAP = {
     "Telugu": "౦౧౨౩౪౫౬౭౮౯"
 }
 LATIN_DIGITS = "0123456789"
+
+# Preprocessing function to clean OCR artifacts
+def clean_ocr_text(text):
+    # Replace common OCR errors
+    replacements = {
+        "vijungtai": "visualization",
+        "vijungtaijation": "visualization",
+        "चाट": "chart",
+        "चाटं": "charts",
+        "परिद्य": "परिदृश्य",
+        "इटा": "data",
+        "दृथ्य": "visual",
+        "प्रतिभिधित्व": "representation",
+        "निहित": "nested",
+        "दूंमेप": "treemap",
+        "पर्यानुक्रमिक": "hierarchical",
+        "अंतदृष्टि": "अंतर्दृष्टि",
+        "मुख्य अंतर्दूहि": "मुख्य अंतर्दृष्टि",
+        "草要 3दिदृष्टि": "मुख्य अंतर्दृष्टि",
+        "महु": "",  # Remove garbage repetition
+        "sradied": "stacked",
+        "cudume": "column",
+        "aelationshlp": "relationship",
+    }
+    for wrong, correct in replacements.items():
+        text = text.replace(wrong, correct)
+    # Remove excessive repetitions
+    text = re.sub(r'(\b\w+\b)(\s+\1)+', r'\1', text)
+    # Remove extra whitespace
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
 
 # Utility functions
 def parse_user_entities(user_input):
@@ -82,22 +113,26 @@ def translate_batch(texts, target_lang):
         return []
     translated_texts = []
     headers = {
-        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Authorization": f"Bearer {GROK_API_KEY}",
         "Content-Type": "application/json"
     }
     
     for text in texts:
+        cleaned_text = clean_ocr_text(text)
+        if not cleaned_text.strip():
+            translated_texts.append("")
+            continue
         try:
             payload = {
                 "model": MODEL_NAME,
                 "messages": [
                     {
                         "role": "system",
-                        "content": f"Translate the following text to {target_lang} accurately. Return only the translated text without additional formatting or metadata."
+                        "content": f"Translate the following text to {target_lang}. Include all text, even if it's already in {target_lang}, rephrasing it naturally if needed. Return only the translated text without additional formatting or metadata."
                     },
                     {
                         "role": "user",
-                        "content": text
+                        "content": cleaned_text
                     }
                 ],
                 "max_tokens": 500,
@@ -105,23 +140,21 @@ def translate_batch(texts, target_lang):
             }
             
             response = requests.post(GROQ_API_URL, headers=headers, json=payload)
-            response.raise_for_status()  # Raise exception for bad status codes
+            response.raise_for_status()
             result = response.json()
             
-            # Debug logging
-            print(f"Raw API response: {result}")
+            print(f"Raw API response for '{cleaned_text[:50]}...': {result}")
             
-            # Extract translated text from Grok's response
-            translated = result.get("choices", [{}])[0].get("message", {}).get("content", text)
-            cleaned_text = re.sub(r'^\.+|\s*\.+$|^\s*…', '', translated.strip())
-            translated_texts.append(cleaned_text)
+            translated = result.get("choices", [{}])[0].get("message", {}).get("content", cleaned_text)
+            cleaned_translated = re.sub(r'^\.+|\s*\.+$|^\s*…', '', translated.strip())
+            translated_texts.append(cleaned_translated)
             
         except requests.exceptions.RequestException as e:
             print(f"⚠️ Translation error: {str(e)}")
-            translated_texts.append(text)  # Fallback to original text
+            translated_texts.append(cleaned_text)  # Fallback to cleaned original
         except Exception as e:
             print(f"⚠️ Unexpected error: {str(e)}")
-            translated_texts.append(text)  # Fallback to original text
+            translated_texts.append(cleaned_text)  # Fallback to cleaned original
             
     return translated_texts
 
@@ -234,7 +267,7 @@ def translate():
     
     pdf_file = request.files['pdf_file']
     entities_input = request.form.get('entities', '')
-    languages_input = request.form.get('languages', 'Hindi,Tamil,Telugu')
+    languages_input = request.form.get('languages', 'Hindi')  # Default to Hindi
     
     pdf_data = pdf_file.read()
     pdf_path = "temp.pdf"
