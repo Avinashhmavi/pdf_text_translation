@@ -10,7 +10,7 @@ app = Flask(__name__)
 # Grok API Configuration
 GROK_API_KEY = "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"
 GROK_API_URL = "https://api.groq.com/openai/v1/chat/completions"
-MODEL_NAME = "gemma2-9b-it"
+MODEL_NAME = "llama3-70b-8192"  # Updated model
 
 # Language Configuration
 LANGUAGES = {
@@ -27,7 +27,6 @@ LATIN_DIGITS = "0123456789"
 
 # Preprocessing function to clean OCR artifacts
 def clean_ocr_text(text):
-    # Replace common OCR errors
     replacements = {
         "vijungtai": "visualization",
         "vijungtaijation": "visualization",
@@ -43,16 +42,16 @@ def clean_ocr_text(text):
         "अंतदृष्टि": "अंतर्दृष्टि",
         "मुख्य अंतर्दूहि": "मुख्य अंतर्दृष्टि",
         "草要 3दिदृष्टि": "मुख्य अंतर्दृष्टि",
-        "महु": "",  # Remove garbage repetition
+        "महु": "",
         "sradied": "stacked",
         "cudume": "column",
         "aelationshlp": "relationship",
+        "विज़ुअलाइज़ेशन": "विज़ुअलाइज़ेशन",  # Prevent Hindi->Hindi replacement
+        "की अंतर्दृष्टि": "की अंतर्दृष्टि"
     }
     for wrong, correct in replacements.items():
         text = text.replace(wrong, correct)
-    # Remove excessive repetitions
     text = re.sub(r'(\b\w+\b)(\s+\1)+', r'\1', text)
-    # Remove extra whitespace
     text = re.sub(r'\s+', ' ', text).strip()
     return text
 
@@ -97,6 +96,7 @@ def replace_with_placeholders(text, entities):
         modified_text, count = pattern.subn(replacer, modified_text)
         if count > 0:
             print(f"🔧 Replaced '{entity}' {count} time(s)")
+    print(f"[DEBUG] Placeholder Map: {placeholder_map}")  # Debug log
     return modified_text, placeholder_map
 
 def convert_numbers_to_script(text, target_lang):
@@ -128,7 +128,11 @@ def translate_batch(texts, target_lang):
                 "messages": [
                     {
                         "role": "system",
-                        "content": f"Translate the following text to {target_lang}. Include all text, even if it's already in {target_lang}, rephrasing it naturally if needed. Return only the translated text without additional formatting or metadata."
+                        "content": f"""
+                        Translate the following text to {target_lang} exactly.
+                        Preserve numbers, placeholders (e.g., __PRESERVE001__), and technical terms.
+                        Return only the translated text without explanations.
+                        """
                     },
                     {
                         "role": "user",
@@ -136,14 +140,14 @@ def translate_batch(texts, target_lang):
                     }
                 ],
                 "max_tokens": 500,
-                "temperature": 0.1
+                "temperature": 0.3  # Adjusted for accuracy
             }
             
             response = requests.post(GROQ_API_URL, headers=headers, json=payload)
             response.raise_for_status()
             result = response.json()
             
-            print(f"Raw API response for '{cleaned_text[:50]}...': {result}")
+            print(f"API Response: {response.text}")  # Debug log
             
             translated = result.get("choices", [{}])[0].get("message", {}).get("content", cleaned_text)
             cleaned_translated = re.sub(r'^\.+|\s*\.+$|^\s*…', '', translated.strip())
@@ -151,10 +155,10 @@ def translate_batch(texts, target_lang):
             
         except requests.exceptions.RequestException as e:
             print(f"⚠️ Translation error: {str(e)}")
-            translated_texts.append(cleaned_text)  # Fallback to cleaned original
+            translated_texts.append(cleaned_text)
         except Exception as e:
             print(f"⚠️ Unexpected error: {str(e)}")
-            translated_texts.append(cleaned_text)  # Fallback to cleaned original
+            translated_texts.append(cleaned_text)
             
     return translated_texts
 
@@ -249,8 +253,19 @@ def rebuild_pdf(components, target_lang, output_path, original_pdf_path):
                     line_rect = fitz.Rect(line["line_bbox"])
                     font_size = line["font_size"]
                     if translated_line.strip():
-                        html = f'<p lang="{lang_iso}" style="margin: 0; padding: 0;">{translated_line}</p>'
-                        css = f"p {{ font-size: {font_size}pt; }}"
+                        css = f"""
+                        @font-face {{
+                            font-family: 'Noto Sans';
+                            src: url(https://fonts.gstatic.com/s/notosans/v28/o-0IIpQlx3QUlC5A4PNr6zRF.ttf);
+                        }}
+                        p {{
+                            font-family: 'Noto Sans';
+                            font-size: {font_size}pt;
+                            margin: 0;
+                            padding: 0;
+                        }}
+                        """
+                        html = f'<p lang="{lang_iso}">{translated_line}</p>'
                         page.insert_htmlbox(line_rect, html, css=css, overlay=True)
     doc.save(output_path, garbage=4, deflate=True)
     doc.close()
@@ -267,7 +282,7 @@ def translate():
     
     pdf_file = request.files['pdf_file']
     entities_input = request.form.get('entities', '')
-    languages_input = request.form.get('languages', 'Hindi')  # Default to Hindi
+    languages_input = request.form.get('languages', 'Hindi')
     
     pdf_data = pdf_file.read()
     pdf_path = "temp.pdf"
