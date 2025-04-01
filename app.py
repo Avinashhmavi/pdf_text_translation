@@ -191,6 +191,26 @@ def rebuild_pdf(components, lang, output_path):
     doc.close()
 
 # Main translation flow
+@app.route('/')
+def home():
+    """Render the main upload page"""
+    return """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>PDF Translator</title>
+    </head>
+    <body>
+        <h1>Upload PDF for Translation</h1>
+        <form action="/translate" method="post" enctype="multipart/form-data">
+            <input type="file" name="pdf_file" accept=".pdf" required>
+            <br><br>
+            <input type="submit" value="Translate to Hindi">
+        </form>
+    </body>
+    </html>
+    """
+
 @app.route('/translate', methods=['POST'])
 def handle_translation():
     if 'pdf_file' not in request.files:
