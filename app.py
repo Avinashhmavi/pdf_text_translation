@@ -80,18 +80,16 @@ def translate_batch(texts, target_lang, fast_mode=False):
     translated_texts = []
     batch_size = 2
     max_retries = 5
-    lang_code = LANGUAGES[target_lang]["code"]
+    lang_code = LANGUAGES[target_lang]["code"]  # Assume LANGUAGES is defined elsewhere
 
     for i in range(0, len(texts), batch_size):
         batch = texts[i:i + batch_size]
-        max_length = max(MAX_LENGTH_DEFAULT, max(len(t.split()) for t in batch) * 2)
+        max_length = max(1000, max(len(t.split()) for t in batch) * 2)  # Replace MAX_LENGTH_DEFAULT with a default value
         
         prompt = f"Translate the following English text to {target_lang} ({lang_code}) with high accuracy, preserving meaning and context:\n\n" + "\n\n".join(batch)
         api_request_json = {
             "model": "llama3.3-70b",
-            "messages": [
-                {"role": "user", "content": prompt}
-            ],
+            "messages": [{"role": "user", "content": prompt}],
             "max_tokens": max_length,
             "temperature": 0.3,
             "top_p": 0.9,
@@ -101,32 +99,46 @@ def translate_batch(texts, target_lang, fast_mode=False):
 
         for attempt in range(max_retries):
             try:
-                response = llama.run(api_request_json)
+                response = llama.run(api_request_json)  # Assume llama is defined
                 result = response.json()
                 
-                # Log the raw response for debugging
+                # Print the raw response for debugging
                 print(f"Raw API response: {json.dumps(result, indent=2)}")
                 
-                # Check if 'choices' exists and is a list
-                if "choices" not in result or not isinstance(result["choices"], list):
-                    raise ValueError(f"Unexpected response format: 'choices' missing or not a list - {result}")
+                # Handle different response structures
+                if isinstance(result, list):
+                    # Case 1: Response is a list (e.g., ["translation1", "translation2"])
+                    if all(isinstance(item, str) for item in result):
+                        translated_batch = [item.strip() for item in result]
+                    # Case 2: Response is a list of dicts (e.g., [{"message": {"content": "translation1"}}])
+                    elif result and isinstance(result[0], dict):
+                        translated_batch = []
+                        for item in result:
+                            if "message" in item and "content" in item["message"]:
+                                translated_batch.append(item["message"]["content"].strip())
+                            else:
+                                raise ValueError(f"Unexpected list item format: {item}")
+                    else:
+                        raise ValueError(f"Unexpected list format: {result}")
+                elif isinstance(result, dict):
+                    # Case 3: Response is a dict with 'choices' (e.g., {"choices": [{"message": {"content": "translation"}}]})
+                    if "choices" in result and isinstance(result["choices"], list) and result["choices"]:
+                        translated_text = result["choices"][0]["message"]["content"].strip()
+                        translated_batch = [t.strip() for t in translated_text.split("\n\n") if t.strip()]
+                    # Case 4: Response is a dict with 'text' (e.g., {"text": "translation"})
+                    elif "text" in result:
+                        translated_text = result["text"].strip()
+                        translated_batch = [t.strip() for t in translated_text.split("\n\n") if t.strip()]
+                    else:
+                        raise ValueError(f"Unexpected dict format: {result}")
+                else:
+                    raise ValueError(f"Unexpected response type: {type(result)}")
                 
-                # Extract translated text
-                choices = result["choices"]
-                if not choices:
-                    raise ValueError("No choices returned in response")
-                
-                # Assuming the first choice contains the assistant's response
-                choice = choices[0]
-                if "message" not in choice or "content" not in choice["message"]:
-                    raise ValueError(f"Unexpected choice format: {choice}")
-                
-                translated_text = choice["message"]["content"].strip()
-                translated_batch = [t.strip() for t in translated_text.split("\n\n") if t.strip()]
-                
+                # Verify the number of translations matches the input batch
                 if len(translated_batch) != len(batch):
                     raise ValueError(f"Mismatch in translation count: expected {len(batch)}, got {len(translated_batch)}")
                 
+                # Clean up translations and add to result
                 translated_texts.extend([re.sub(r'^\s*…|\.+$', '', t) for t in translated_batch])
                 break
 
@@ -141,7 +153,6 @@ def translate_batch(texts, target_lang, fast_mode=False):
             time.sleep(0.5)
 
     return translated_texts
-
 # PDF processing functions (unchanged)
 def extract_pdf_components(pdf_path):
     print(f"\n📄 Extracting components from {pdf_path}...")
