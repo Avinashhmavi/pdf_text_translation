@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, send_file
+from flask import Flask, render_template, request, send_file, jsonify
 import json
 from llamaapi import LlamaAPI
 import fitz  # PyMuPDF
@@ -27,7 +27,7 @@ DIGIT_MAP = {
 }
 LATIN_DIGITS = "0123456789"
 
-# Utility functions (keeping same as original)
+# Utility functions
 def parse_user_entities(user_input):
     entities = [e.strip() for e in user_input.split(',') if e.strip()]
     print(f"📌 Entities to preserve: {', '.join(entities) if entities else 'None'}")
@@ -84,22 +84,42 @@ def translate_batch(texts, target_lang):
         return []
     translated_texts = []
     for text in texts:
-        api_request = {
-            "model": MODEL_NAME,
-            "messages": [
-                {"role": "user", "content": f"Translate this to {target_lang}: {text}"}
-            ],
-            "max_token": 500,
-            "temperature": 0.1,
-            "stream": False
-        }
-        response = llama.run(api_request)
-        result = response.json()
-        translated = result.get('choices', [{}])[0].get('message', {}).get('content', '')
-        translated_texts.append(re.sub(r'^\.+|\s*\.+$|^\s*…', '', translated.strip()))
+        try:
+            api_request = {
+                "model": MODEL_NAME,
+                "messages": [
+                    {"role": "system", "content": f"You are a translator. Translate the following text to {target_lang} accurately."},
+                    {"role": "user", "content": text}
+                ],
+                "max_token": 500,
+                "temperature": 0.1,
+                "stream": False
+            }
+            response = llama.run(api_request)
+            result = response.json()
+            
+            # Handle different possible response formats
+            if isinstance(result, list):
+                # If response is a list, get the first item's content
+                translated = result[0].get('message', {}).get('content', '')
+            elif isinstance(result, dict):
+                # If response is a dict, look for choices or message
+                choices = result.get('choices', [])
+                if choices:
+                    translated = choices[0].get('message', {}).get('content', '')
+                else:
+                    translated = result.get('message', {}).get('content', '')
+            else:
+                translated = str(result)  # Fallback
+            
+            cleaned_text = re.sub(r'^\.+|\s*\.+$|^\s*…', '', translated.strip())
+            translated_texts.append(cleaned_text)
+        except Exception as e:
+            print(f"⚠️ Translation error: {str(e)}")
+            translated_texts.append(text)  # Fallback to original text on error
     return translated_texts
 
-# PDF processing functions (mostly same as original)
+# PDF processing functions
 def extract_pdf_components(pdf_path):
     doc = fitz.open(pdf_path)
     components = []
@@ -127,7 +147,6 @@ def extract_pdf_components(pdf_path):
     return components
 
 def split_block_into_subblocks(block):
-    # Same as original, simplified for brevity
     lines = block["lines"]
     if not lines:
         return []
@@ -205,7 +224,7 @@ def index():
 @app.route('/translate', methods=['POST'])
 def translate():
     if 'pdf_file' not in request.files:
-        return "Error: No PDF file uploaded", 400
+        return jsonify({"error": "No PDF file uploaded"}), 400
     
     pdf_file = request.files['pdf_file']
     entities_input = request.form.get('entities', '')
@@ -222,17 +241,28 @@ def translate():
     
     output_files = []
     for lang in languages:
-        translate_chunk(components, entities, lang)
-        output_path = f"translated_{lang}.pdf"
-        rebuild_pdf(components, lang, output_path, pdf_path)
-        if os.path.exists(output_path):
-            output_files.append(output_path)
+        try:
+            translate_chunk(components, entities, lang)
+            output_path = f"translated_{lang}.pdf"
+            rebuild_pdf(components, lang, output_path, pdf_path)
+            if os.path.exists(output_path):
+                output_files.append(output_path)
+            else:
+                print(f"⚠️ Failed to generate {output_path}")
+        except Exception as e:
+            print(f"⚠️ Error processing {lang}: {str(e)}")
+            continue
 
     if not output_files:
-        return "Error: Translation failed", 500
+        return jsonify({"error": "Translation failed"}), 500
 
-    # For simplicity, return first translated file
-    return send_file(output_files[0], as_attachment=True, download_name=f"translated_{languages[0]}.pdf")
+    # Return the first translated file
+    return send_file(
+        output_files[0],
+        as_attachment=True,
+        download_name=f"translated_{languages[0]}.pdf",
+        mimetype='application/pdf'
+    )
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
