@@ -12,7 +12,7 @@ app = Flask(__name__)
 # LlamaAPI Configuration
 LLAMA_API_KEY = "c5f4d16a-62a5-407e-b854-3cea14e3891a"
 llama = LlamaAPI(LLAMA_API_KEY)
-MODEL_NAME = "llama3.3-70b"
+MODEL_NAME = "deepseek-r1"
 
 # Language Configuration
 LANGUAGES = {
