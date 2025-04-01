@@ -1,44 +1,125 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>Multilingual PDF Translator</title>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Multilingual PDF Translator</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
     <style>
-        /* ... (styles remain unchanged) ... */
+        /* Custom animations */
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .fade-in {
+            animation: fadeIn 0.5s ease-out forwards;
+        }
+        .progress-bar {
+            transition: width 0.5s ease-in-out;
+        }
+        .hover-scale {
+            transition: transform 0.3s ease;
+        }
+        .hover-scale:hover {
+            transform: scale(1.05);
+        }
     </style>
 </head>
-<body>
-    <div class="container">
-        <h1>Multilingual PDF Translator</h1>
-        <form id="translateForm" enctype="multipart/form-data">
-            <div class="form-group">
-                <label for="pdf">Select PDF:</label>
-                <input type="file" id="pdf" name="pdf" accept=".pdf" required>
+<body class="bg-gray-100 font-sans">
+    <div class="container mx-auto px-4 py-8 max-w-3xl">
+        <!-- Header -->
+        <header class="text-center mb-8">
+            <h1 class="text-4xl font-bold text-indigo-600 mb-2 fade-in">Multilingual PDF Translator</h1>
+            <p class="text-gray-600 fade-in" style="animation-delay: 0.2s;">Translate your PDFs into multiple languages with ease</p>
+        </header>
+
+        <!-- Form Section -->
+        <section class="bg-white rounded-lg shadow-lg p-6 mb-8 fade-in" style="animation-delay: 0.4s;">
+            <form id="translateForm" enctype="multipart/form-data">
+                <!-- PDF Upload -->
+                <div class="mb-6">
+                    <label for="pdf" class="block text-sm font-medium text-gray-700 mb-2">Upload PDF</label>
+                    <div class="relative border-2 border-dashed border-gray-300 rounded-lg p-4 hover:border-indigo-500 transition-colors">
+                        <input type="file" id="pdf" name="pdf" accept=".pdf" required 
+                               class="absolute inset-0 w-full h-full opacity-0 cursor-pointer">
+                        <div class="text-center">
+                            <svg class="mx-auto h-12 w-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 0113 5a5 5 0 014.9 4.097A4 4 0 0117 16H7z" />
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 13v6m-3-3l3-3 3 3" />
+                            </svg>
+                            <p class="mt-1 text-sm text-gray-600">Drag and drop or click to upload a PDF</p>
+                            <p id="file-name" class="mt-2 text-sm text-indigo-600"></p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Language Selection -->
+                <div class="mb-6">
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Select Languages</label>
+                    <div class="grid grid-cols-2 gap-4">
+                        {% for lang in languages %}
+                            <label class="flex items-center space-x-2 hover-scale">
+                                <input type="checkbox" name="languages" value="{{ lang }}" 
+                                       class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded">
+                                <span class="text-gray-700">{{ lang }}</span>
+                            </label>
+                        {% endfor %}
+                    </div>
+                </div>
+
+                <!-- Entities -->
+                <div class="mb-6">
+                    <label for="entities" class="block text-sm font-medium text-gray-700 mb-2">Entities to Preserve</label>
+                    <input type="text" id="entities" name="entities" 
+                           placeholder="e.g., CompanyName, Product123 (comma-separated)"
+                           class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                </div>
+
+                <!-- Submit Button -->
+                <button type="submit" 
+                        class="w-full bg-indigo-600 text-white py-2 px-4 rounded-md hover:bg-indigo-700 transition-colors hover-scale">
+                    Start Translation
+                </button>
+            </form>
+        </section>
+
+        <!-- Progress Section -->
+        <section id="progress" class="bg-white rounded-lg shadow-lg p-6 hidden">
+            <h2 class="text-xl font-semibold text-gray-800 mb-4">Translation Progress</h2>
+            <div id="status" class="text-gray-700 mb-2"></div>
+            <div class="w-full bg-gray-200 rounded-full h-2.5 mb-4">
+                <div id="progress-bar" class="bg-indigo-600 h-2.5 rounded-full progress-bar" style="width: 0%"></div>
             </div>
-            <div class="form-group">
-                <label>Select Languages:</label>
-                {% for lang in languages %}
-                    <input type="checkbox" name="languages" value="{{ lang }}"> {{ lang }}<br>
-                {% endfor %}
-            </div>
-            <div class="form-group">
-                <label for="entities">Entities to Preserve (comma-separated):</label>
-                <input type="text" id="entities" name="entities" placeholder="e.g., CompanyName, Product123">
-            </div>
-            <button type="submit">Translate</button>
-        </form>
-        <div id="progress"></div>
+            <div id="languages-progress" class="text-sm text-gray-600 mb-4"></div>
+            <div id="download-links" class="space-y-2"></div>
+        </section>
     </div>
 
     <script>
-        document.getElementById('translateForm').addEventListener('submit', async (e) => {
+        const form = document.getElementById('translateForm');
+        const progressSection = document.getElementById('progress');
+        const statusDiv = document.getElementById('status');
+        const progressBar = document.getElementById('progress-bar');
+        const languagesProgress = document.getElementById('languages-progress');
+        const downloadLinks = document.getElementById('download-links');
+        const fileInput = document.getElementById('pdf');
+        const fileNameDisplay = document.getElementById('file-name');
+
+        // Display selected file name
+        fileInput.addEventListener('change', () => {
+            fileNameDisplay.textContent = fileInput.files[0] ? fileInput.files[0].name : '';
+        });
+
+        form.addEventListener('submit', async (e) => {
             e.preventDefault();
-            const formData = new FormData(e.target);
-            const progressDiv = document.getElementById('progress');
-            
+            const formData = new FormData(form);
+            progressSection.classList.remove('hidden');
+            statusDiv.textContent = 'Starting translation...';
+            progressBar.style.width = '0%';
+            languagesProgress.textContent = '';
+            downloadLinks.innerHTML = '';
+
             try {
-                console.log('Sending request with FormData:', formData); // Debugging
                 const response = await fetch('/translate', {
                     method: 'POST',
                     body: formData
@@ -48,34 +129,36 @@
                 if (!response.ok) throw new Error(result.error);
                 
                 const jobId = result.job_id;
-                progressDiv.innerHTML = 'Translation in progress...';
-                
+                statusDiv.textContent = 'Translation in progress...';
+
                 const interval = setInterval(async () => {
                     const progressResponse = await fetch(`/progress/${jobId}`);
                     const progress = await progressResponse.json();
                     
-                    progressDiv.innerHTML = `
-                        Status: ${progress.status}<br>
-                        Progress: ${progress.progress}%<br>
-                        Languages: ${Object.entries(progress.languages)
-                            .map(([lang, prog]) => `${lang}: ${prog}`).join(', ')}
-                    `;
+                    statusDiv.textContent = `Status: ${progress.status}`;
+                    progressBar.style.width = `${progress.progress}%`;
+                    languagesProgress.textContent = Object.entries(progress.languages)
+                        .map(([lang, prog]) => `${lang}: ${prog} pages`)
+                        .join(', ');
                     
                     if (progress.status === 'completed') {
                         clearInterval(interval);
-                        progressDiv.innerHTML += '<br>Download links:<br>' + 
+                        statusDiv.textContent = 'Translation Completed!';
+                        downloadLinks.innerHTML = '<h3 class="text-lg font-medium text-gray-700">Download Links:</h3>' +
                             Object.entries(progress.files)
-                                .map(([lang, url]) => `<a href="${url}">${lang}</a>`)
-                                .join('<br>');
+                                .map(([lang, url]) => `<a href="${url}" class="block text-indigo-600 hover:underline hover-scale">${lang} PDF</a>`)
+                                .join('');
                     } else if (progress.status === 'failed') {
                         clearInterval(interval);
-                        progressDiv.innerHTML += `<br>Error: ${progress.error}`;
+                        statusDiv.textContent = 'Translation Failed';
+                        downloadLinks.innerHTML = `<p class="text-red-600">Error: ${progress.error}</p>`;
                     }
                 }, 2000);
                 
             } catch (error) {
-                progressDiv.innerHTML = `Error: ${error.message}`;
-                console.error('Error:', error); // Debugging
+                statusDiv.textContent = 'Error';
+                languagesProgress.textContent = error.message;
+                progressSection.classList.add('bg-red-50');
             }
         });
     </script>
