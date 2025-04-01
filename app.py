@@ -1,10 +1,11 @@
 import os
 import time
 import re
-import requests
+import json
 from flask import Flask, request, render_template, send_file, jsonify
 import fitz  # PyMuPDF
 from werkzeug.utils import secure_filename
+from llamaapi import LlamaAPI  # Import LlamaAPI SDK
 
 app = Flask(__name__)
 
@@ -16,22 +17,17 @@ os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['OUTPUT_FOLDER'] = OUTPUT_FOLDER
 
-# Hugging Face API Configuration
-HF_API_KEY = "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"
-HF_API_URL = "https://api-inference.huggingface.co/models/facebook/nllb-200-3.3B"
-HEADERS = {
-    "Authorization": f"Bearer {HF_API_KEY}",
-    "X-Wait-For-Model": "180",  # Wait up to 3 minutes
-    "X-Use-Cache": "0"
-}
+# LlamaAPI Configuration
+LLAMA_API_KEY = "c5f4d16a-62a5-407e-b854-3cea14e3891a"  # Your provided API key
+llama = LlamaAPI(LLAMA_API_KEY)  # Initialize the SDK
 
-# Update token IDs for 1.3B model:
+# Language codes
 LANGUAGES = {
-    "Hindi": {"token_id": 256047, "code": "hin_Deva", "iso": "hi"},
-    "Tamil": {"token_id": 256157, "code": "tam_Taml", "iso": "ta"},
-    "Telugu": {"token_id": 256082, "code": "tel_Telu", "iso": "te"}
+    "Hindi": {"code": "hi", "iso": "hi"},
+    "Tamil": {"code": "ta", "iso": "ta"},
+    "Telugu": {"code": "te", "iso": "te"}
 }
-MAX_LENGTH_DEFAULT = 512
+MAX_LENGTH_DEFAULT = 1024  # Increased for better context handling
 
 DIGIT_MAP = {
     "Hindi": "०१२३४५६७८९",
@@ -83,55 +79,56 @@ def translate_batch(texts, target_lang, fast_mode=False):
     
     translated_texts = []
     batch_size = 2
-    max_retries = 3
-    lang_data = LANGUAGES[target_lang]
+    max_retries = 5  # Increased retries for reliability
+    lang_code = LANGUAGES[target_lang]["code"]
 
     for i in range(0, len(texts), batch_size):
         batch = texts[i:i + batch_size]
         max_length = max(MAX_LENGTH_DEFAULT, max(len(t.split()) for t in batch) * 2)
-        payload = {
-            "inputs": batch,
-            "parameters": {
-                "max_length": max_length,
-                "forced_bos_token_id": lang_data["token_id"],
-                "src_lang": "eng_Latn",
-                "tgt_lang": lang_data["code"]
-            }
+        
+        # Craft a prompt for LlamaAPI
+        prompt = f"Translate the following English text to {target_lang} ({lang_code}) with high accuracy, preserving meaning and context:\n\n" + "\n\n".join(batch)
+        api_request_json = {
+            "model": "llama3.3-70b",  # Specify Llama 3.3-70B model
+            "messages": [
+                {"role": "user", "content": prompt}
+            ],
+            "max_tokens": max_length,
+            "temperature": 0.3,  # Lower temperature for deterministic output
+            "top_p": 0.9,  # Adjust for better quality
+            "frequency_penalty": 1.0,  # Reduce repetition
+            "stream": False
         }
 
         for attempt in range(max_retries):
             try:
-                response = requests.post(HF_API_URL, headers=HEADERS, json=payload)
-                response.raise_for_status()
+                response = llama.run(api_request_json)
                 result = response.json()
 
-                if isinstance(result, list):
-                    translated = [r.get("translation_text", "") for r in result]
-                    translated_texts.extend([re.sub(r'^\s*…|\.+$', '', t.strip()) for t in translated])
-                    break
-                else:
-                    if "estimated_time" in result:
-                        wait_time = result["estimated_time"] + 5
-                        print(f"Model loading, retrying in {wait_time}s...")
-                        time.sleep(wait_time)
-                        continue
-                    raise ValueError(f"Unexpected response format: {result}")
+                # Extract the translated text from the response
+                translated_text = result.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+                translated_batch = [t.strip() for t in translated_text.split("\n\n") if t.strip()]
+                
+                # Ensure the number of translations matches the input batch
+                if len(translated_batch) != len(batch):
+                    raise ValueError(f"Mismatch in translation count: expected {len(batch)}, got {len(translated_batch)}")
+                
+                translated_texts.extend([re.sub(r'^\s*…|\.+$', '', t) for t in translated_batch])
+                break
 
-            except requests.exceptions.HTTPError as e:
-                if e.response.status_code == 503 and attempt < max_retries - 1:
-                    wait_time = 10 * (attempt + 1)
-                    print(f"Server overloaded, retrying in {wait_time}s...")
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    wait_time = 5 * (attempt + 1)  # Exponential backoff
+                    print(f"Error: {str(e)}. Retrying in {wait_time}s...")
                     time.sleep(wait_time)
                     continue
-                raise
+                raise Exception(f"Translation failed after {max_retries} attempts: {str(e)}")
 
-            time.sleep(1)
+            time.sleep(0.5)  # Small delay between retries
 
     return translated_texts
 
-# PDF processing functions (extract_pdf_components, split_block_into_subblocks, 
-# ... [Keep previous configuration and constants] ...
-
+# PDF processing functions (unchanged)
 def extract_pdf_components(pdf_path):
     print(f"\n📄 Extracting components from {pdf_path}...")
     doc = fitz.open(pdf_path)
@@ -305,7 +302,7 @@ def redistribute_translated_text(translated_text, original_lines):
     
     return lines + [""]*(len(original_lines)-len(lines))
 
-# ... [Keep the Flask routes from previous code] ...
+# Flask routes (unchanged)
 @app.route('/')
 def index():
     return render_template('index.html')
