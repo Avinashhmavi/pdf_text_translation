@@ -7,10 +7,10 @@ from io import BytesIO
 
 app = Flask(__name__)
 
-# Grok API Configuration
-GROK_API_KEY = "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"
-GROK_API_URL = "https://api.groq.com/openai/v1/chat/completions"
-MODEL_NAME = "llama3-70b-8192"  # Updated model
+# Groq API Configuration
+GROQ_API_KEY = "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"
+GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
+MODEL_NAME = "llama3-70b-8192"  # Verified supported model
 
 # Language Configuration
 LANGUAGES = {
@@ -20,302 +20,223 @@ LANGUAGES = {
 }
 DIGIT_MAP = {
     "Hindi": "०१२३४५६७८९",
-    "Tamil": "௦௧௨௩௪௫௬௭௮௯",
+    "Tamil": "௦௧௨௩௪௫௬௭௮௯", 
     "Telugu": "౦౧౨౩౪౫౬౭౮౯"
 }
 LATIN_DIGITS = "0123456789"
 
-# Preprocessing function to clean OCR artifacts
+# Enhanced OCR cleaning
 def clean_ocr_text(text):
     replacements = {
+        # English OCR fixes
         "vijungtai": "visualization",
-        "vijungtaijation": "visualization",
-        "चाट": "chart",
-        "चाटं": "charts",
-        "परिद्य": "परिदृश्य",
-        "इटा": "data",
-        "दृथ्य": "visual",
-        "प्रतिभिधित्व": "representation",
-        "निहित": "nested",
-        "दूंमेप": "treemap",
-        "पर्यानुक्रमिक": "hierarchical",
-        "अंतदृष्टि": "अंतर्दृष्टि",
-        "मुख्य अंतर्दूहि": "मुख्य अंतर्दृष्टि",
-        "草要 3दिदृष्टि": "मुख्य अंतर्दृष्टि",
-        "महु": "",
         "sradied": "stacked",
         "cudume": "column",
         "aelationshlp": "relationship",
-        "विज़ुअलाइज़ेशन": "विज़ुअलाइज़ेशन",  # Prevent Hindi->Hindi replacement
-        "की अंतर्दृष्टि": "की अंतर्दृष्टि"
+        
+        # Hindi preservation/corrections
+        "चाट": "chart",
+        "इटा": "data",
+        "दृथ्य": "visual",
+        "परिद्य": "परिदृश्य",
+        "अंतदृष्टि": "अंतर्दृष्टि",
+        "मुख्य अंतर्दूहि": "मुख्य अंतर्दृष्टि",
+        "बार चार्ट": "बार चार्ट",  # Preserve correct Hindi
+        "विज़ुअलाइज़ेशन": "विज़ुअलाइज़ेशन",
+        
+        # Remove garbage text
+        "महु": "",
+        "草要 3दिदृष्टि": "मुख्य अंतर्दृष्टि"
     }
     for wrong, correct in replacements.items():
         text = text.replace(wrong, correct)
-    text = re.sub(r'(\b\w+\b)(\s+\1)+', r'\1', text)
-    text = re.sub(r'\s+', ' ', text).strip()
-    return text
+    text = re.sub(r'(\b\w+\b)(\s+\1)+', r'\1', text)  # Remove repetitions
+    return re.sub(r'\s+', ' ', text).strip()
 
-# Utility functions
-def parse_user_entities(user_input):
-    entities = [e.strip() for e in user_input.split(',') if e.strip()]
-    print(f"📌 Entities to preserve: {', '.join(entities) if entities else 'None'}")
-    return sorted(set(entities), key=len, reverse=True)
-
-def parse_user_languages(user_input):
-    selected = [lang.strip().capitalize() for lang in user_input.split(',')]
-    valid = [lang for lang in selected if lang in LANGUAGES]
-    if not valid:
-        print("⚠️ No valid languages selected. Using all available.")
-        return list(LANGUAGES.keys())
-    print(f"🌍 Selected languages: {', '.join(valid)}")
-    return valid
-
+# Enhanced entity preservation
 def replace_with_placeholders(text, entities):
     placeholder_map = {}
     modified_text = text
+    
+    # Preserve technical patterns
     patterns = [
-        (re.compile(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'), "emails"),
-        (re.compile(r'https?://\S+|www\.\S+'), "URLs"),
-        (re.compile(r'@\w+'), "usernames"),
-        (re.compile(r'[\$£€%#@&*]\s*\d+(?:\.\d+)?|\d+(?:\.\d+)?[\$£€%#@&*]'), "symbols_with_numbers"),
-        (re.compile(r'[\$£€%#@&*]'), "symbols")
+        (re.compile(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'), "email"),
+        (re.compile(r'https?://\S+|www\.\S+'), "url"),
+        (re.compile(r'@\w+'), "username"),
+        (re.compile(r'[\$£€%#@&*]\s*\d+(?:\.\d+)?|\d+(?:\.\d+)?[\$£€%#@&*]'), "symbol_num"),
     ]
+    
     for pattern, _ in patterns:
-        matches = pattern.findall(modified_text)
-        for match in matches:
+        for match in pattern.findall(modified_text):
             placeholder = f"__PRESERVE{len(placeholder_map):03d}__"
             placeholder_map[placeholder] = match
             modified_text = modified_text.replace(match, placeholder)
+
+    # Preserve user entities
     for entity in entities:
-        pattern = re.compile(r'\b' + re.escape(entity) + r'\b', re.IGNORECASE)
-        def replacer(match):
-            original = match.group()
-            placeholder = f"__PRESERVE{len(placeholder_map):03d}__"
-            placeholder_map[placeholder] = original
-            return placeholder
-        modified_text, count = pattern.subn(replacer, modified_text)
-        if count > 0:
-            print(f"🔧 Replaced '{entity}' {count} time(s)")
-    print(f"[DEBUG] Placeholder Map: {placeholder_map}")  # Debug log
+        modified_text = re.sub(
+            re.escape(entity), 
+            lambda m: f"__PRESERVE{len(placeholder_map):03d}__",
+            modified_text,
+            flags=re.IGNORECASE
+        )
+        placeholder_map[f"__PRESERVE{len(placeholder_map):03d}__"] = entity
+
+    print(f"🔍 Placeholder mapping: {placeholder_map}")
     return modified_text, placeholder_map
 
-def convert_numbers_to_script(text, target_lang):
-    digit_map = DIGIT_MAP[target_lang]
-    def replace_digit(match):
-        number = match.group(0)
-        converted = ''.join(digit_map[int(d)] if d in LATIN_DIGITS else d for d in number)
-        return converted
-    pattern = re.compile(r'(?<!__PRESERVE\d{3}__)\b\d+(?:\.\d+)?\b(?![^_]*__)')
-    return pattern.sub(replace_digit, text)
-
+# Strict translation function
 def translate_batch(texts, target_lang):
-    if not texts:
-        return []
-    translated_texts = []
     headers = {
-        "Authorization": f"Bearer {GROK_API_KEY}",
+        "Authorization": f"Bearer {GROQ_API_KEY}",
         "Content-Type": "application/json"
     }
     
+    translated = []
     for text in texts:
-        cleaned_text = clean_ocr_text(text)
-        if not cleaned_text.strip():
-            translated_texts.append("")
-            continue
         try:
-            payload = {
-                "model": MODEL_NAME,
-                "messages": [
-                    {
-                        "role": "system",
-                        "content": f"""
-                        Translate the following text to {target_lang} exactly.
-                        Preserve numbers, placeholders (e.g., __PRESERVE001__), and technical terms.
-                        Return only the translated text without explanations.
-                        """
-                    },
-                    {
-                        "role": "user",
-                        "content": cleaned_text
-                    }
-                ],
-                "max_tokens": 500,
-                "temperature": 0.3  # Adjusted for accuracy
-            }
-            
-            response = requests.post(GROQ_API_URL, headers=headers, json=payload)
-            response.raise_for_status()
+            response = requests.post(
+                GROQ_API_URL,
+                headers=headers,
+                json={
+                    "model": MODEL_NAME,
+                    "messages": [
+                        {
+                            "role": "system",
+                            "content": f"""
+                            YOU MUST TRANSLATE TO {target_lang} EXACTLY:
+                            - Preserve __PRESERVExxx__ placeholders
+                            - Keep technical terms (Chart, Histogram, etc)
+                            - NEVER return English original text
+                            - Output ONLY the translation
+                            """
+                        },
+                        {"role": "user", "content": text}
+                    ],
+                    "temperature": 0.2,
+                    "max_tokens": 1000
+                }
+            )
             result = response.json()
-            
-            print(f"API Response: {response.text}")  # Debug log
-            
-            translated = result.get("choices", [{}])[0].get("message", {}).get("content", cleaned_text)
-            cleaned_translated = re.sub(r'^\.+|\s*\.+$|^\s*…', '', translated.strip())
-            translated_texts.append(cleaned_translated)
-            
-        except requests.exceptions.RequestException as e:
-            print(f"⚠️ Translation error: {str(e)}")
-            translated_texts.append(cleaned_text)
+            translated_text = result['choices'][0]['message']['content'].strip()
+            translated.append(translated_text)
+            print(f"✅ Translated: {text[:50]}... -> {translated_text[:50]}...")
         except Exception as e:
-            print(f"⚠️ Unexpected error: {str(e)}")
-            translated_texts.append(cleaned_text)
-            
-    return translated_texts
+            print(f"🚨 Translation failed: {str(e)}")
+            translated.append(text)  # Fallback
+    
+    return translated
 
-# PDF processing functions
+# Enhanced PDF processing
 def extract_pdf_components(pdf_path):
     doc = fitz.open(pdf_path)
     components = []
+    
     for page_num, page in enumerate(doc):
+        print(f"\n📄 PAGE {page_num+1} CONTENT:")
         blocks = page.get_text("dict")["blocks"]
-        text_blocks = []
-        for b in blocks:
-            if b["type"] == 0:
+        page_blocks = []
+        
+        for block in blocks:
+            if block["type"] == 0:  # Text block
                 lines = []
-                for line in b["lines"]:
-                    if line["spans"]:
-                        text = "".join(span["text"].strip() for span in line["spans"])
-                        if text.strip():
-                            lines.append({
-                                "text": text,
-                                "y_pos": line["spans"][0]["origin"][1],
-                                "x_pos": line["spans"][0]["origin"][0],
-                                "font_size": line["spans"][0]["size"],
-                                "line_bbox": line["bbox"]
-                            })
+                for line in block["lines"]:
+                    line_text = " ".join(span["text"].strip() for span in line["spans"])
+                    if line_text:
+                        print(f"| {line_text}")  # Debug output
+                        lines.append({
+                            "text": line_text,
+                            "bbox": line["bbox"],
+                            "font_size": line["spans"][0]["size"]
+                        })
+                
                 if lines:
-                    text_blocks.append({"bbox": b["bbox"], "lines": lines})
-        components.append({"page_num": page_num, "text_blocks": text_blocks, "size": (page.rect.width, page.rect.height)})
+                    page_blocks.append({
+                        "bbox": block["bbox"],
+                        "lines": lines
+                    })
+        
+        components.append({
+            "page_num": page_num,
+            "blocks": page_blocks,
+            "size": (page.rect.width, page.rect.height)
+        })
+    
     doc.close()
     return components
 
-def split_block_into_subblocks(block):
-    lines = block["lines"]
-    if not lines:
-        return []
-    subblocks = []
-    current_subblock = {"text": "", "lines": [], "is_short": False}
-    for i, line in enumerate(lines):
-        text = line["text"].strip()
-        if not text:
-            continue
-        current_subblock["text"] += " " + text if current_subblock["text"] else text
-        current_subblock["lines"].append(line)
-        subblocks.append(current_subblock)
-        current_subblock = {"text": "", "lines": [], "is_short": False}
-    return subblocks
-
-def translate_chunk(chunk, entities, target_lang):
-    all_subblocks = []
-    for page in chunk:
-        for block in page["text_blocks"]:
-            subblocks = split_block_into_subblocks(block)
-            block["subblocks"] = subblocks
-            all_subblocks.extend(subblocks)
-
-    texts = []
-    placeholder_maps = []
-    for subblock in all_subblocks:
-        original_text = subblock["text"]
-        if not original_text.strip():
-            subblock["translated_text"] = ""
-            continue
-        modified_text, placeholder_map = replace_with_placeholders(original_text, entities)
-        texts.append(modified_text)
-        placeholder_maps.append(placeholder_map)
-
-    if texts:
-        translated_texts = translate_batch(texts, target_lang)
-        for subblock, translated_text, placeholder_map in zip(
-            [sb for sb in all_subblocks if sb["text"].strip()], translated_texts, placeholder_maps
-        ):
-            for placeholder, original in placeholder_map.items():
-                if placeholder in translated_text:
-                    translated_text = translated_text.replace(placeholder, original)
-                else:
-                    translated_text += f" {original}"
-            translated_text = convert_numbers_to_script(translated_text, target_lang)
-            subblock["translated_text"] = translated_text
-
-def rebuild_pdf(components, target_lang, output_path, original_pdf_path):
-    doc = fitz.open(original_pdf_path)
-    lang_iso = LANGUAGES[target_lang]["iso"]
+# Font-embedded PDF reconstruction
+def rebuild_pdf(components, lang, output_path):
+    doc = fitz.open()
+    
     for page_data in components:
-        page = doc[page_data["page_num"]]
-        for block in page_data["text_blocks"]:
-            original_bbox = fitz.Rect(block["bbox"])
-            page.add_redact_annot(original_bbox)
-            page.apply_redactions()
-            for subblock in block["subblocks"]:
-                if "translated_text" not in subblock or not subblock["translated_text"].strip():
-                    continue
-                for line, translated_line in zip(subblock["lines"], [subblock["translated_text"]]):
-                    line_rect = fitz.Rect(line["line_bbox"])
+        page = doc.new_page(width=page_data["size"][0], height=page_data["size"][1])
+        
+        for block in page_data["blocks"]:
+            for line in block["lines"]:
+                if "translated" in line:
+                    text = line["translated"]
                     font_size = line["font_size"]
-                    if translated_line.strip():
-                        css = f"""
-                        @font-face {{
-                            font-family: 'Noto Sans';
-                            src: url(https://fonts.gstatic.com/s/notosans/v28/o-0IIpQlx3QUlC5A4PNr6zRF.ttf);
-                        }}
-                        p {{
-                            font-family: 'Noto Sans';
-                            font-size: {font_size}pt;
-                            margin: 0;
-                            padding: 0;
-                        }}
-                        """
-                        html = f'<p lang="{lang_iso}">{translated_line}</p>'
-                        page.insert_htmlbox(line_rect, html, css=css, overlay=True)
+                    
+                    # Hindi/Tamil/Telugu compatible font
+                    page.insert_text(
+                        point=(line["bbox"][0], line["bbox"][1] + font_size),
+                        text=text,
+                        fontname="notos",
+                        fontsize=font_size,
+                        encoding=fitz.TEXT_ENCODING_UNICODE
+                    )
+    
     doc.save(output_path, garbage=4, deflate=True)
     doc.close()
 
-# Flask Routes
-@app.route('/')
-def index():
-    return render_template('index.html')
-
+# Main translation flow
 @app.route('/translate', methods=['POST'])
-def translate():
+def handle_translation():
     if 'pdf_file' not in request.files:
-        return jsonify({"error": "No PDF file uploaded"}), 400
+        return jsonify({"error": "No PDF uploaded"}), 400
     
     pdf_file = request.files['pdf_file']
-    entities_input = request.form.get('entities', '')
-    languages_input = request.form.get('languages', 'Hindi')
-    
-    pdf_data = pdf_file.read()
     pdf_path = "temp.pdf"
-    with open(pdf_path, "wb") as f:
-        f.write(pdf_data)
-
-    entities = parse_user_entities(entities_input)
-    languages = parse_user_languages(languages_input)
+    pdf_file.save(pdf_path)
+    
+    # Process PDF
     components = extract_pdf_components(pdf_path)
     
-    output_files = []
-    for lang in languages:
-        try:
-            translate_chunk(components, entities, lang)
-            output_path = f"translated_{lang}.pdf"
-            rebuild_pdf(components, lang, output_path, pdf_path)
-            if os.path.exists(output_path):
-                output_files.append(output_path)
-            else:
-                print(f"⚠️ Failed to generate {output_path}")
-        except Exception as e:
-            print(f"⚠️ Error processing {lang}: {str(e)}")
-            continue
-
-    if not output_files:
-        return jsonify({"error": "Translation failed"}), 500
-
-    return send_file(
-        output_files[0],
-        as_attachment=True,
-        download_name=f"translated_{languages[0]}.pdf",
-        mimetype='application/pdf'
-    )
+    # Extract all text chunks
+    text_chunks = []
+    for page in components:
+        for block in page["blocks"]:
+            for line in block["lines"]:
+                text_chunks.append(line["text"])
+    
+    # Translate with entity preservation
+    entities = request.form.get('entities', '').split(',')
+    translated_chunks = []
+    for chunk in text_chunks:
+        clean_text = clean_ocr_text(chunk)
+        modified_text, placeholders = replace_with_placeholders(clean_text, entities)
+        translated = translate_batch([modified_text], "Hindi")[0]
+        
+        # Restore placeholders
+        for ph, original in placeholders.items():
+            translated = translated.replace(ph, original)
+        
+        translated_chunks.append(translated)
+    
+    # Rebuild PDF with translations
+    output_path = "translated.pdf"
+    idx = 0
+    for page in components:
+        for block in page["blocks"]:
+            for line in block["lines"]:
+                if idx < len(translated_chunks):
+                    line["translated"] = translated_chunks[idx]
+                    idx += 1
+    
+    rebuild_pdf(components, "Hindi", output_path)
+    
+    return send_file(output_path, as_attachment=True)
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
