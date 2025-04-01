@@ -1,18 +1,16 @@
 from flask import Flask, render_template, request, send_file, jsonify
-import json
-from llamaapi import LlamaAPI
 import fitz  # PyMuPDF
 import re
-import time
 import os
+import requests
 from io import BytesIO
 
 app = Flask(__name__)
 
-# LlamaAPI Configuration
-LLAMA_API_KEY = "c5f4d16a-62a5-407e-b854-3cea14e3891a"
-llama = LlamaAPI(LLAMA_API_KEY)
-MODEL_NAME = "deepseek-r1"
+# Grok API Configuration
+GROQ_API_KEY = "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"
+GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
+MODEL_NAME = "gemma2-9b-it"  # Using Gemma2 9B Instruct model
 
 # Language Configuration
 LANGUAGES = {
@@ -83,40 +81,48 @@ def translate_batch(texts, target_lang):
     if not texts:
         return []
     translated_texts = []
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    
     for text in texts:
         try:
-            api_request = {
+            payload = {
                 "model": MODEL_NAME,
                 "messages": [
-                    {"role": "system", "content": f"You are a translator. Translate the following text to {target_lang} accurately."},
-                    {"role": "user", "content": text}
+                    {
+                        "role": "system",
+                        "content": f"Translate the following text to {target_lang} accurately. Return only the translated text without additional formatting or metadata."
+                    },
+                    {
+                        "role": "user",
+                        "content": text
+                    }
                 ],
-                "max_token": 500,
-                "temperature": 0.1,
-                "stream": False
+                "max_tokens": 500,
+                "temperature": 0.1
             }
-            response = llama.run(api_request)
+            
+            response = requests.post(GROQ_API_URL, headers=headers, json=payload)
+            response.raise_for_status()  # Raise exception for bad status codes
             result = response.json()
             
-            # Handle different possible response formats
-            if isinstance(result, list):
-                # If response is a list, get the first item's content
-                translated = result[0].get('message', {}).get('content', '')
-            elif isinstance(result, dict):
-                # If response is a dict, look for choices or message
-                choices = result.get('choices', [])
-                if choices:
-                    translated = choices[0].get('message', {}).get('content', '')
-                else:
-                    translated = result.get('message', {}).get('content', '')
-            else:
-                translated = str(result)  # Fallback
+            # Debug logging
+            print(f"Raw API response: {result}")
             
+            # Extract translated text from Grok's response
+            translated = result.get("choices", [{}])[0].get("message", {}).get("content", text)
             cleaned_text = re.sub(r'^\.+|\s*\.+$|^\s*…', '', translated.strip())
             translated_texts.append(cleaned_text)
-        except Exception as e:
+            
+        except requests.exceptions.RequestException as e:
             print(f"⚠️ Translation error: {str(e)}")
-            translated_texts.append(text)  # Fallback to original text on error
+            translated_texts.append(text)  # Fallback to original text
+        except Exception as e:
+            print(f"⚠️ Unexpected error: {str(e)}")
+            translated_texts.append(text)  # Fallback to original text
+            
     return translated_texts
 
 # PDF processing functions
@@ -256,7 +262,6 @@ def translate():
     if not output_files:
         return jsonify({"error": "Translation failed"}), 500
 
-    # Return the first translated file
     return send_file(
         output_files[0],
         as_attachment=True,
