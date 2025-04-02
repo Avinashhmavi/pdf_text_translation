@@ -14,10 +14,10 @@ import shutil
 
 app = Flask(__name__)
 
-# Groq API Configuration
-GROQ_API_KEY = "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"
-GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
-MODEL_NAME = "llama3-70b-8192"
+# OpenAI API Configuration
+OPENAI_API_KEY = "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"  # Replace with your actual OpenAI API key
+OPENAI_API_URL = "https://api.openai.com/v1/chat/completions"
+MODEL_NAME = "gpt-4o"
 
 # Define translation batch size and concurrency
 MAX_BATCH_SIZE = 10
@@ -115,7 +115,7 @@ def extract_preserve_patterns(text):
 def replace_with_placeholders(text, entities):
     auto_entities = extract_preserve_patterns(text)
     all_entities = {entity: {"type": "user_specified", "span": None} for entity in entities if entity.strip()}
-    all_entities.update(auto_entities)
+    all_entities.update(autos_entities)
     
     sorted_entities = sorted(all_entities.keys(), key=len, reverse=True)
     modified_text = text
@@ -160,7 +160,7 @@ def translate_text_batch(text_batch, target_lang, retry_count=2):
         return []
         
     headers = {
-        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Authorization": f"Bearer {OPENAI_API_KEY}",
         "Content-Type": "application/json"
     }
     
@@ -187,7 +187,7 @@ def translate_text_batch(text_batch, target_lang, retry_count=2):
     for attempt in range(retry_count + 1):
         try:
             response = requests.post(
-                GROQ_API_URL,
+                OPENAI_API_URL,
                 headers=headers,
                 json=payload,
                 timeout=REQUEST_TIMEOUT
@@ -340,7 +340,7 @@ def rebuild_translated_pdf(components, original_pdf_path, output_path, target_la
     
     for page_data in components:
         page_num = page_data["page_num"]
-        input_page = input_doc[page_num]
+        inputme_input_page = input_doc[page_num]
         
         new_page = output_doc.new_page(
             width=page_data["size"][0],
