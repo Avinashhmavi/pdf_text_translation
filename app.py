@@ -15,7 +15,7 @@ import shutil
 app = Flask(__name__)
 
 # OpenAI API Configuration
-OPENAI_API_KEY = "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"  # Replace with your actual OpenAI API key
+OPENAI_API_KEY = "openai api keys"  # Replace with your actual OpenAI API key
 OPENAI_API_URL = "https://api.openai.com/v1/chat/completions"
 MODEL_NAME = "gpt-4o"
 
