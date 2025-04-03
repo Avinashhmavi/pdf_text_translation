@@ -14,13 +14,10 @@ import shutil
 
 app = Flask(__name__)
 
-# Load OpenAI API Key from environment variables (set by Render from /etc/secrets/.env)
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
-if not OPENAI_API_KEY:
-    raise ValueError("OPENAI_API_KEY not found in environment variables. Ensure it's set in /etc/secrets/.env on Render.")
-
-OPENAI_API_URL = "https://api.openai.com/v1/chat/completions"
-MODEL_NAME = "gpt-4o"
+# Groq API Configuration
+GROQ_API_KEY = "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"
+GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
+MODEL_NAME = "llama3-70b-8192"
 
 # Define translation batch size and concurrency
 MAX_BATCH_SIZE = 10
@@ -42,6 +39,7 @@ DIGIT_MAP = {
 
 LATIN_DIGITS = "0123456789"
 
+# Translation status tracking
 translation_jobs = {}
 local_thread_storage = threading.local()
 
@@ -162,7 +160,7 @@ def translate_text_batch(text_batch, target_lang, retry_count=2):
         return []
         
     headers = {
-        "Authorization": f"Bearer {OPENAI_API_KEY}",
+        "Authorization": f"Bearer {GROQ_API_KEY}",
         "Content-Type": "application/json"
     }
     
@@ -189,7 +187,7 @@ def translate_text_batch(text_batch, target_lang, retry_count=2):
     for attempt in range(retry_count + 1):
         try:
             response = requests.post(
-                OPENAI_API_URL,
+                GROQ_API_URL,
                 headers=headers,
                 json=payload,
                 timeout=REQUEST_TIMEOUT
@@ -198,7 +196,6 @@ def translate_text_batch(text_batch, target_lang, retry_count=2):
             
             result = response.json()
             translated_content = result.get("choices", [{}])[0].get("message", {}).get("content", "")
-            log_info(f"Successfully translated batch to {target_lang}")
             
             if len(text_batch) > 1:
                 splits = translated_content.split("\n\n")
@@ -218,7 +215,7 @@ def translate_text_batch(text_batch, target_lang, retry_count=2):
             return [s.strip() for s in splits]
             
         except requests.exceptions.RequestException as e:
-            log_error(f"API error on attempt {attempt+1}: {str(e)} - Response: {response.text if 'response' in locals() else 'No response'}")
+            log_error(f"API error on attempt {attempt+1}: {str(e)}")
             if attempt < retry_count:
                 time.sleep(2 * (attempt + 1))
             else:
@@ -338,7 +335,7 @@ def rebuild_translated_pdf(components, original_pdf_path, output_path, target_la
     log_info(f"Rebuilding PDF with {target_lang} translations: {output_path}")
     
     lang_config = LANGUAGES.get(target_lang, {})
-    lang_font = lang_config.get("font", "helv")
+    lang_font = lang_config.get("font", "")
     lang_iso = lang_config.get("iso", "")
     
     for page_data in components:
@@ -368,7 +365,7 @@ def rebuild_translated_pdf(components, original_pdf_path, output_path, target_la
                     
                     try:
                         text_options = {
-                            "fontname": lang_font,
+                            "fontname": lang_font or "helv",
                             "fontsize": font_size,
                             "color": (0, 0, 0)
                         }
@@ -393,7 +390,6 @@ def rebuild_translated_pdf(components, original_pdf_path, output_path, target_la
 def translate_pdf(job_id, pdf_path, entities, languages):
     try:
         components, total_pages = extract_pdf_components(pdf_path)
-        log_info(f"Extracted {total_pages} pages from PDF")
         
         if job_id in translation_jobs:
             translation_jobs[job_id].total_pages = total_pages
@@ -402,7 +398,6 @@ def translate_pdf(job_id, pdf_path, entities, languages):
         
         for lang in languages:
             try:
-                log_info(f"Starting translation to {lang}")
                 translated_components = translate_pdf_components(
                     components.copy(),
                     lang,
@@ -442,6 +437,7 @@ def translate_pdf(job_id, pdf_path, entities, languages):
             translation_jobs[job_id].fail(str(e))
         raise
 
+# Flask Routes
 @app.route('/')
 def index():
     return render_template('index.html', languages=LANGUAGES.keys())
@@ -452,13 +448,8 @@ def translate():
         return jsonify({'error': 'No PDF file provided'}), 400
 
     pdf_file = request.files['pdf']
-    if pdf_file.filename == '' or not pdf_file:
-        return jsonify({'error': 'No file selected or invalid file'}), 400
-    
-    pdf_file.seek(0, os.SEEK_END)
-    if pdf_file.tell() == 0:
-        return jsonify({'error': 'Empty PDF file'}), 400
-    pdf_file.seek(0)
+    if pdf_file.filename == '':
+        return jsonify({'error': 'No file selected'}), 400
 
     languages = request.form.getlist('languages')
     entities = request.form.get('entities', '').split(',')
@@ -517,5 +508,6 @@ def download_file(job_id, language):
     return response
 
 if __name__ == '__main__':
+    # Get port from environment variable or default to 5000
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=True)
