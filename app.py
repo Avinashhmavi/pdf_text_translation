@@ -14,8 +14,11 @@ import shutil
 
 app = Flask(__name__)
 
-# OpenAI API Configuration
-OPENAI_API_KEY = "openai api keys"  # Replace with your actual OpenAI API key
+# Load OpenAI API Key from environment variables (set by Render from /etc/secrets/.env)
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+if not OPENAI_API_KEY:
+    raise ValueError("OPENAI_API_KEY not found in environment variables. Ensure it's set in /etc/secrets/.env on Render.")
+
 OPENAI_API_URL = "https://api.openai.com/v1/chat/completions"
 MODEL_NAME = "gpt-4o"
 
@@ -348,7 +351,7 @@ def rebuild_translated_pdf(components, original_pdf_path, output_path, target_la
         )
         
         new_page.show_pdf_page(
-            cover_page.rect,
+            new_page.rect,
             input_doc,
             page_num
         )
