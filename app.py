@@ -39,7 +39,6 @@ DIGIT_MAP = {
 
 LATIN_DIGITS = "0123456789"
 
-# Translation status tracking
 translation_jobs = {}
 local_thread_storage = threading.local()
 
@@ -115,7 +114,7 @@ def extract_preserve_patterns(text):
 def replace_with_placeholders(text, entities):
     auto_entities = extract_preserve_patterns(text)
     all_entities = {entity: {"type": "user_specified", "span": None} for entity in entities if entity.strip()}
-    all_entities.update(autos_entities)
+    all_entities.update(auto_entities)
     
     sorted_entities = sorted(all_entities.keys(), key=len, reverse=True)
     modified_text = text
@@ -196,6 +195,7 @@ def translate_text_batch(text_batch, target_lang, retry_count=2):
             
             result = response.json()
             translated_content = result.get("choices", [{}])[0].get("message", {}).get("content", "")
+            log_info(f"Successfully translated batch to {target_lang}")
             
             if len(text_batch) > 1:
                 splits = translated_content.split("\n\n")
@@ -215,7 +215,7 @@ def translate_text_batch(text_batch, target_lang, retry_count=2):
             return [s.strip() for s in splits]
             
         except requests.exceptions.RequestException as e:
-            log_error(f"API error on attempt {attempt+1}: {str(e)}")
+            log_error(f"API error on attempt {attempt+1}: {str(e)} - Response: {response.text if 'response' in locals() else 'No response'}")
             if attempt < retry_count:
                 time.sleep(2 * (attempt + 1))
             else:
@@ -335,12 +335,12 @@ def rebuild_translated_pdf(components, original_pdf_path, output_path, target_la
     log_info(f"Rebuilding PDF with {target_lang} translations: {output_path}")
     
     lang_config = LANGUAGES.get(target_lang, {})
-    lang_font = lang_config.get("font", "")
+    lang_font = lang_config.get("font", "helv")
     lang_iso = lang_config.get("iso", "")
     
     for page_data in components:
         page_num = page_data["page_num"]
-        inputme_input_page = input_doc[page_num]
+        input_page = input_doc[page_num]
         
         new_page = output_doc.new_page(
             width=page_data["size"][0],
@@ -348,7 +348,7 @@ def rebuild_translated_pdf(components, original_pdf_path, output_path, target_la
         )
         
         new_page.show_pdf_page(
-            new_page.rect,
+            cover_page.rect,
             input_doc,
             page_num
         )
@@ -365,7 +365,7 @@ def rebuild_translated_pdf(components, original_pdf_path, output_path, target_la
                     
                     try:
                         text_options = {
-                            "fontname": lang_font or "helv",
+                            "fontname": lang_font,
                             "fontsize": font_size,
                             "color": (0, 0, 0)
                         }
@@ -390,6 +390,7 @@ def rebuild_translated_pdf(components, original_pdf_path, output_path, target_la
 def translate_pdf(job_id, pdf_path, entities, languages):
     try:
         components, total_pages = extract_pdf_components(pdf_path)
+        log_info(f"Extracted {total_pages} pages from PDF")
         
         if job_id in translation_jobs:
             translation_jobs[job_id].total_pages = total_pages
@@ -398,6 +399,7 @@ def translate_pdf(job_id, pdf_path, entities, languages):
         
         for lang in languages:
             try:
+                log_info(f"Starting translation to {lang}")
                 translated_components = translate_pdf_components(
                     components.copy(),
                     lang,
@@ -437,7 +439,6 @@ def translate_pdf(job_id, pdf_path, entities, languages):
             translation_jobs[job_id].fail(str(e))
         raise
 
-# Flask Routes
 @app.route('/')
 def index():
     return render_template('index.html', languages=LANGUAGES.keys())
@@ -448,8 +449,13 @@ def translate():
         return jsonify({'error': 'No PDF file provided'}), 400
 
     pdf_file = request.files['pdf']
-    if pdf_file.filename == '':
-        return jsonify({'error': 'No file selected'}), 400
+    if pdf_file.filename == '' or not pdf_file:
+        return jsonify({'error': 'No file selected or invalid file'}), 400
+    
+    pdf_file.seek(0, os.SEEK_END)
+    if pdf_file.tell() == 0:
+        return jsonify({'error': 'Empty PDF file'}), 400
+    pdf_file.seek(0)
 
     languages = request.form.getlist('languages')
     entities = request.form.get('entities', '').split(',')
@@ -508,6 +514,5 @@ def download_file(job_id, language):
     return response
 
 if __name__ == '__main__':
-    # Get port from environment variable or default to 5000
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=True)
